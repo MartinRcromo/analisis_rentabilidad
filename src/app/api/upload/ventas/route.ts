@@ -176,25 +176,12 @@ export async function POST(request: NextRequest) {
       (insertadas || []).forEach((c) => categoriasMap.set(c.codigo, c.id));
     }
 
-    // 5. Insertar/actualizar productos
-    const productosCodigos = [...new Set(parseResult.data.map((v) => v.idproducto).filter(Boolean))];
+    // 5. Insertar/actualizar productos usando upsert
     const productosMap = new Map<string, number>();
 
-    if (productosCodigos.length > 0) {
-      const { data: productosExistentes, error: errProdSelect } = await supabase
-        .from('productos')
-        .select('id, codigo')
-        .in('codigo', productosCodigos);
-
-      if (errProdSelect) {
-        dbErrors.push(`Error leyendo productos: ${errProdSelect.message}`);
-      }
-      (productosExistentes || []).forEach((p) => productosMap.set(p.codigo, p.id));
-    }
-
-    // Preparar productos nuevos
-    const productosNuevosData = parseResult.data
-      .filter((v) => v.idproducto && !productosMap.has(v.idproducto))
+    // Preparar todos los productos (upsert manejará duplicados)
+    const productosData = parseResult.data
+      .filter((v) => v.idproducto)
       .map((v) => ({
         codigo: v.idproducto,
         nombre: v.producto,
@@ -205,28 +192,28 @@ export async function POST(request: NextRequest) {
         categoria_id: categoriasMap.get(v.idcategoria) || null,
       }));
 
-    // Eliminar duplicados por codigo
-    const productosNuevosUnicos = Array.from(
-      new Map(productosNuevosData.map((p) => [p.codigo, p])).values()
+    // Eliminar duplicados por codigo (mantener el último)
+    const productosUnicos = Array.from(
+      new Map(productosData.map((p) => [p.codigo, p])).values()
     );
 
-    console.log(`Insertando ${productosNuevosUnicos.length} productos nuevos`);
+    console.log(`Upserting ${productosUnicos.length} productos`);
 
-    if (productosNuevosUnicos.length > 0) {
-      // Insertar en lotes de 500
+    if (productosUnicos.length > 0) {
+      // Upsert en lotes de 500
       const batchSize = 500;
-      for (let i = 0; i < productosNuevosUnicos.length; i += batchSize) {
-        const batch = productosNuevosUnicos.slice(i, i + batchSize);
-        const { data: insertados, error: errProdInsert } = await supabase
+      for (let i = 0; i < productosUnicos.length; i += batchSize) {
+        const batch = productosUnicos.slice(i, i + batchSize);
+        const { data: upserted, error: errProdUpsert } = await supabase
           .from('productos')
-          .insert(batch)
-          .select();
+          .upsert(batch, { onConflict: 'codigo' })
+          .select('id, codigo');
 
-        if (errProdInsert) {
-          dbErrors.push(`Error insertando productos (lote ${i}): ${errProdInsert.message}`);
-          console.error('Error insertando productos:', errProdInsert);
+        if (errProdUpsert) {
+          dbErrors.push(`Error upserting productos (lote ${i}): ${errProdUpsert.message}`);
+          console.error('Error upserting productos:', errProdUpsert);
         }
-        (insertados || []).forEach((p) => productosMap.set(p.codigo, p.id));
+        (upserted || []).forEach((p) => productosMap.set(p.codigo, p.id));
       }
     }
 
