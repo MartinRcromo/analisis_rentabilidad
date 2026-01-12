@@ -52,17 +52,22 @@ export async function GET(request: NextRequest) {
     }
 
     // 3. Calcular TOTALES del período (para los porcentajes)
+    // IMPORTANTE: TOTAL_MARGEN solo suma valores POSITIVOS (para que los % sumen 100%)
     let TOTAL_FACTURACION = 0;
     let TOTAL_VOLUMEN = 0;
     let TOTAL_STOCK = 0;
-    let TOTAL_MARGEN = 0;
+    let TOTAL_MARGEN = 0;  // Solo valores positivos
 
     (productos || []).forEach((p) => {
       const metricas = p.metricas_producto[0];
       TOTAL_FACTURACION += metricas.importe_ventas || 0;
       TOTAL_VOLUMEN += metricas.stock_volumen || 0;
       TOTAL_STOCK += metricas.stock_costo || 0;
-      TOTAL_MARGEN += metricas.margen_bruto || 0;
+      // Solo sumar margen positivo para el total (los negativos no aportan al gasto por rentabilidad)
+      const margen = metricas.margen_bruto || 0;
+      if (margen > 0) {
+        TOTAL_MARGEN += margen;
+      }
     });
 
     // 4. Obtener gastos finales del período
@@ -132,7 +137,9 @@ export async function GET(request: NextRequest) {
       const pct_facturacion = TOTAL_FACTURACION > 0 ? sub.facturacion / TOTAL_FACTURACION : 0;
       const pct_volumen = TOTAL_VOLUMEN > 0 ? sub.volumen / TOTAL_VOLUMEN : 0;
       const pct_credito = TOTAL_STOCK > 0 ? sub.stock_costo / TOTAL_STOCK : 0;
-      const pct_margen = TOTAL_MARGEN > 0 ? Math.max(sub.margen_bruto, 0) / TOTAL_MARGEN : 0;
+      // Para rentabilidad: si margen negativo = 0% de gasto rentabilidad
+      const margen_positivo = Math.max(sub.margen_bruto, 0);
+      const pct_margen = TOTAL_MARGEN > 0 ? margen_positivo / TOTAL_MARGEN : 0;
 
       // Gastos asignados al subrubro
       const gasto_facturacion = pct_facturacion * GASTOS_FACTURACION;
@@ -190,6 +197,9 @@ export async function GET(request: NextRequest) {
     // Ordenar por resultado ascendente (peores primero)
     subrubrosFiltrados.sort((a, b) => a.resultado - b.resultado);
 
+    // Debug: buscar Bujía de Encendido para verificar cálculo
+    const bujiaDebug = subrubrosFiltrados.find(s => s.subrubro.toLowerCase().includes('bujia'));
+
     return NextResponse.json({
       periodo: periodoActual,
       empresa,
@@ -201,6 +211,7 @@ export async function GET(request: NextRequest) {
         total_margen: TOTAL_MARGEN,
         total_subrubros: subrubrosFiltrados.length,
         subrubros_perdida: subrubrosFiltrados.filter((s) => s.en_perdida).length,
+        total_productos: productos?.length || 0,
       },
       gastos: {
         facturacion: GASTOS_FACTURACION,
@@ -208,6 +219,16 @@ export async function GET(request: NextRequest) {
         credito: GASTOS_CREDITO,
         rentabilidad: GASTOS_RENTABILIDAD,
         total: GASTOS_TOTAL,
+      },
+      // Debug info para verificar cálculos
+      debug: {
+        bujia_encendido: bujiaDebug || null,
+        gastos_raw: gastos ? {
+          cat1_facturacion_final: gastos.cat1_facturacion_final,
+          cat2_volumen_final: gastos.cat2_volumen_final,
+          cat3_credito_final: gastos.cat3_credito_final,
+          cat4_rentabilidad_final: gastos.cat4_rentabilidad_final,
+        } : null,
       },
     });
   } catch (error) {

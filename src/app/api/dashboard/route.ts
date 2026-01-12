@@ -159,17 +159,21 @@ export async function GET(request: NextRequest) {
       .eq('metricas_producto.periodo', periodoActual);
 
     // Calcular totales del período
+    // IMPORTANTE: TOTAL_MARGEN solo suma valores POSITIVOS
     let TOTAL_FACTURACION = 0;
     let TOTAL_VOLUMEN = 0;
     let TOTAL_STOCK = 0;
-    let TOTAL_MARGEN = 0;
+    let TOTAL_MARGEN = 0;  // Solo valores positivos
 
     (productosData || []).forEach((p) => {
       const metricas = p.metricas_producto[0];
       TOTAL_FACTURACION += metricas.importe_ventas || 0;
       TOTAL_VOLUMEN += metricas.stock_volumen || 0;
       TOTAL_STOCK += metricas.stock_costo || 0;
-      TOTAL_MARGEN += metricas.margen_bruto || 0;
+      const margen = metricas.margen_bruto || 0;
+      if (margen > 0) {
+        TOTAL_MARGEN += margen;
+      }
     });
 
     // Obtener gastos del período
@@ -226,7 +230,8 @@ export async function GET(request: NextRequest) {
       const pct_facturacion = TOTAL_FACTURACION > 0 ? sub.facturacion / TOTAL_FACTURACION : 0;
       const pct_volumen = TOTAL_VOLUMEN > 0 ? sub.volumen / TOTAL_VOLUMEN : 0;
       const pct_credito = TOTAL_STOCK > 0 ? sub.stock_costo / TOTAL_STOCK : 0;
-      const pct_margen = TOTAL_MARGEN > 0 ? Math.max(sub.margen_bruto, 0) / TOTAL_MARGEN : 0;
+      const margen_positivo = Math.max(sub.margen_bruto, 0);
+      const pct_margen = TOTAL_MARGEN > 0 ? margen_positivo / TOTAL_MARGEN : 0;
 
       const gasto_total =
         pct_facturacion * GASTOS_FACTURACION +
