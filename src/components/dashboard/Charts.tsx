@@ -59,7 +59,7 @@ export function EvolucionChart({ data }: { data: EvolucionData[] }) {
         <XAxis dataKey="periodoLabel" fontSize={12} />
         <YAxis fontSize={12} tickFormatter={(v) => `${v}M`} />
         <Tooltip
-          formatter={(value: number) => [`$${value.toFixed(1)}M`, '']}
+          formatter={(value: number | undefined) => value !== undefined ? [`$${value.toFixed(1)}M`, ''] : ['', '']}
           labelFormatter={(label) => `Período: ${label}`}
         />
         <Legend />
