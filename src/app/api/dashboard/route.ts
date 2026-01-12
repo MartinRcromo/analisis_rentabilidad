@@ -139,85 +139,120 @@ export async function GET(request: NextRequest) {
     // Ordenar cronológicamente
     evolucion_6_meses.sort((a, b) => a.periodo.localeCompare(b.periodo));
 
-    // 4. Top 10 peores subrubros
-    const { data: topPeores } = await supabase.rpc('get_top_subrubros', {
-      p_periodo: periodoActual,
-      p_empresa: empresa === 'todas' ? null : empresa,
-      p_limit: 10,
-      p_order: 'asc',
+    // 4. Calcular top subrubros con metodología correcta (agregar primero, luego calcular gastos)
+    // Obtener productos con métricas para el período
+    const { data: productosData } = await supabase
+      .from('productos')
+      .select(`
+        id,
+        empresa,
+        subrubro_id,
+        subrubros(id, nombre),
+        metricas_producto!inner(
+          importe_ventas,
+          importe_costo,
+          stock_volumen,
+          stock_costo,
+          margen_bruto
+        )
+      `)
+      .eq('metricas_producto.periodo', periodoActual);
+
+    // Calcular totales del período
+    let TOTAL_FACTURACION = 0;
+    let TOTAL_VOLUMEN = 0;
+    let TOTAL_STOCK = 0;
+    let TOTAL_MARGEN = 0;
+
+    (productosData || []).forEach((p) => {
+      const metricas = p.metricas_producto[0];
+      TOTAL_FACTURACION += metricas.importe_ventas || 0;
+      TOTAL_VOLUMEN += metricas.stock_volumen || 0;
+      TOTAL_STOCK += metricas.stock_costo || 0;
+      TOTAL_MARGEN += metricas.margen_bruto || 0;
     });
 
-    // 5. Top 10 mejores subrubros
-    const { data: topMejores } = await supabase.rpc('get_top_subrubros', {
-      p_periodo: periodoActual,
-      p_empresa: empresa === 'todas' ? null : empresa,
-      p_limit: 10,
-      p_order: 'desc',
+    // Obtener gastos del período
+    const GASTOS_FACTURACION = gastos?.cat1_facturacion_final || 0;
+    const GASTOS_VOLUMEN = gastos?.cat2_volumen_final || 0;
+    const GASTOS_CREDITO = gastos?.cat3_credito_final || 0;
+    const GASTOS_RENTABILIDAD = gastos?.cat4_rentabilidad_final || 0;
+
+    // Agregar por subrubro
+    const subrubrosMap = new Map<string, {
+      empresa: string;
+      subrubro_id: number;
+      subrubro: string;
+      facturacion: number;
+      volumen: number;
+      stock_costo: number;
+      margen_bruto: number;
+      productos_count: number;
+    }>();
+
+    (productosData || []).forEach((p) => {
+      if (!p.subrubros || !p.subrubro_id) return;
+      if (empresa !== 'todas' && p.empresa !== empresa) return;
+
+      const subrubroData = p.subrubros as unknown as { id: number; nombre: string } | { id: number; nombre: string }[];
+      const subrubroInfo = Array.isArray(subrubroData) ? subrubroData[0] : subrubroData;
+      if (!subrubroInfo) return;
+      const key = `${p.empresa}_${p.subrubro_id}`;
+      const metricas = p.metricas_producto[0];
+
+      if (!subrubrosMap.has(key)) {
+        subrubrosMap.set(key, {
+          empresa: p.empresa,
+          subrubro_id: p.subrubro_id,
+          subrubro: subrubroInfo.nombre,
+          facturacion: 0,
+          volumen: 0,
+          stock_costo: 0,
+          margen_bruto: 0,
+          productos_count: 0,
+        });
+      }
+
+      const sub = subrubrosMap.get(key)!;
+      sub.facturacion += metricas.importe_ventas || 0;
+      sub.volumen += metricas.stock_volumen || 0;
+      sub.stock_costo += metricas.stock_costo || 0;
+      sub.margen_bruto += metricas.margen_bruto || 0;
+      sub.productos_count++;
     });
 
-    // Si la función RPC no existe, usar query alternativa
-    let topPeoresData = topPeores;
-    let topMejoresData = topMejores;
+    // Calcular resultado para cada subrubro
+    const subrubrosConResultado = Array.from(subrubrosMap.values()).map((sub) => {
+      const pct_facturacion = TOTAL_FACTURACION > 0 ? sub.facturacion / TOTAL_FACTURACION : 0;
+      const pct_volumen = TOTAL_VOLUMEN > 0 ? sub.volumen / TOTAL_VOLUMEN : 0;
+      const pct_credito = TOTAL_STOCK > 0 ? sub.stock_costo / TOTAL_STOCK : 0;
+      const pct_margen = TOTAL_MARGEN > 0 ? Math.max(sub.margen_bruto, 0) / TOTAL_MARGEN : 0;
 
-    if (!topPeores) {
-      // Query alternativa para top subrubros
-      const { data: subrubrosData } = await supabase
-        .from('analisis_producto')
-        .select(`
-          resultado,
-          producto:productos!inner(
-            empresa,
-            subrubro:subrubros(id, nombre)
-          )
-        `)
-        .eq('periodo', periodoActual);
+      const gasto_total =
+        pct_facturacion * GASTOS_FACTURACION +
+        pct_volumen * GASTOS_VOLUMEN +
+        pct_credito * GASTOS_CREDITO +
+        pct_margen * GASTOS_RENTABILIDAD;
 
-      // Agregar por subrubro
-      const subrubrosTotales: Record<
-        string,
-        { nombre: string; empresa: string; resultado: number; productos: number }
-      > = {};
+      const resultado = sub.margen_bruto - gasto_total;
 
-      (subrubrosData || []).forEach((a) => {
-        const prod = a.producto as unknown as { empresa: string; subrubro: { id: number; nombre: string } | null };
-        if (!prod?.subrubro) return;
-        if (empresa !== 'todas' && prod.empresa !== empresa) return;
+      return {
+        subrubro: sub.subrubro,
+        empresa: sub.empresa,
+        total_productos: sub.productos_count,
+        resultado,
+      };
+    });
 
-        const key = `${prod.subrubro.id}-${prod.empresa}`;
-        if (!subrubrosTotales[key]) {
-          subrubrosTotales[key] = {
-            nombre: prod.subrubro.nombre,
-            empresa: prod.empresa,
-            resultado: 0,
-            productos: 0,
-          };
-        }
-        subrubrosTotales[key].resultado += a.resultado;
-        subrubrosTotales[key].productos++;
-      });
+    // Top 10 peores (menor resultado)
+    const topPeoresData = [...subrubrosConResultado]
+      .sort((a, b) => a.resultado - b.resultado)
+      .slice(0, 10);
 
-      const subrubrosArray = Object.values(subrubrosTotales);
-
-      topPeoresData = subrubrosArray
-        .sort((a, b) => a.resultado - b.resultado)
-        .slice(0, 10)
-        .map((s) => ({
-          subrubro: s.nombre,
-          empresa: s.empresa,
-          total_productos: s.productos,
-          resultado: s.resultado,
-        }));
-
-      topMejoresData = subrubrosArray
-        .sort((a, b) => b.resultado - a.resultado)
-        .slice(0, 10)
-        .map((s) => ({
-          subrubro: s.nombre,
-          empresa: s.empresa,
-          total_productos: s.productos,
-          resultado: s.resultado,
-        }));
-    }
+    // Top 10 mejores (mayor resultado)
+    const topMejoresData = [...subrubrosConResultado]
+      .sort((a, b) => b.resultado - a.resultado)
+      .slice(0, 10);
 
     return NextResponse.json({
       periodo: periodoActual,
