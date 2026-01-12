@@ -44,9 +44,26 @@ export async function POST(request: NextRequest) {
     // Calcular gastos finales con distribución proporcional
     const gastosCalculados = calcularGastosFinales(parseResult.clasificados);
 
-    // Eliminar gastos existentes del período
-    await supabase.from('gastos_mensuales').delete().eq('periodo', periodoParam);
-    await supabase.from('gastos_detalle').delete().eq('periodo', periodoParam);
+    const dbErrors: string[] = [];
+
+    // Eliminar gastos existentes del período (para poder recargar sin duplicados)
+    const { error: errDeleteMensuales } = await supabase
+      .from('gastos_mensuales')
+      .delete()
+      .eq('periodo', periodoParam);
+
+    if (errDeleteMensuales) {
+      dbErrors.push(`Error eliminando gastos mensuales anteriores: ${errDeleteMensuales.message}`);
+    }
+
+    const { error: errDeleteDetalle } = await supabase
+      .from('gastos_detalle')
+      .delete()
+      .eq('periodo', periodoParam);
+
+    if (errDeleteDetalle) {
+      dbErrors.push(`Error eliminando detalle de gastos anteriores: ${errDeleteDetalle.message}`);
+    }
 
     // Insertar gastos mensuales
     const { data: gastoMensual, error: errorGasto } = await supabase
@@ -74,8 +91,15 @@ export async function POST(request: NextRequest) {
 
     if (errorGasto) {
       console.error('Error insertando gastos mensuales:', errorGasto);
+      dbErrors.push(`Error insertando gastos mensuales: ${errorGasto.message}`);
       return NextResponse.json(
-        { error: 'Error guardando gastos mensuales', details: errorGasto.message },
+        {
+          success: false,
+          error: 'Error guardando gastos mensuales',
+          dbErrors,
+          parseErrors: parseResult.errors.slice(0, 10),
+          periodo: periodoParam,
+        },
         { status: 500 }
       );
     }
@@ -101,10 +125,26 @@ export async function POST(request: NextRequest) {
     let detallesInsertados = 0;
     for (let i = 0; i < detallesData.length; i += batchSize) {
       const batch = detallesData.slice(i, i + batchSize);
-      const { error } = await supabase.from('gastos_detalle').insert(batch);
-      if (!error) {
+      const { error: errBatch } = await supabase.from('gastos_detalle').insert(batch);
+      if (errBatch) {
+        dbErrors.push(`Error insertando detalle de gastos (lote ${i}): ${errBatch.message}`);
+        console.error('Error insertando detalle de gastos:', errBatch);
+      } else {
         detallesInsertados += batch.length;
       }
+    }
+
+    // Si hay errores de BD, devolverlos
+    if (dbErrors.length > 0) {
+      return NextResponse.json({
+        success: false,
+        error: 'Hubo errores al guardar gastos en la base de datos',
+        dbErrors,
+        parseErrors: parseResult.errors.slice(0, 10),
+        periodo: periodoParam,
+        gastos_parseados: parseResult.data.length,
+        gastos_guardados: detallesInsertados,
+      }, { status: 500 });
     }
 
     return NextResponse.json({

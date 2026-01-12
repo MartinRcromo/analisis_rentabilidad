@@ -424,19 +424,69 @@ function ResultAlert({
   result: UploadResult;
   className?: string;
 }) {
+  const details = result.details as {
+    dbErrors?: string[];
+    parseErrors?: string[];
+    productos_parseados?: number;
+    productos_guardados?: number;
+    gastos_parseados?: number;
+    gastos_guardados?: number;
+  } | undefined;
+
   return (
     <Alert
       className={`${className} ${result.success ? 'border-green-200 bg-green-50' : 'border-red-200 bg-red-50'}`}
     >
-      <div className="flex items-center gap-2">
-        {result.success ? (
-          <CheckCircle className="h-5 w-5 text-green-500" />
-        ) : (
-          <AlertCircle className="h-5 w-5 text-red-500" />
+      <div className="flex flex-col gap-2">
+        <div className="flex items-center gap-2">
+          {result.success ? (
+            <CheckCircle className="h-5 w-5 text-green-500" />
+          ) : (
+            <AlertCircle className="h-5 w-5 text-red-500" />
+          )}
+          <span className={result.success ? 'text-green-700' : 'text-red-700'}>
+            {result.message}
+          </span>
+        </div>
+
+        {/* Mostrar detalles de error de BD */}
+        {!result.success && details?.dbErrors && details.dbErrors.length > 0 && (
+          <div className="mt-2 rounded bg-red-100 p-3 text-sm">
+            <p className="font-medium text-red-800">Errores de Base de Datos:</p>
+            <ul className="mt-1 list-inside list-disc text-red-700">
+              {details.dbErrors.map((err, i) => (
+                <li key={i}>{err}</li>
+              ))}
+            </ul>
+          </div>
         )}
-        <span className={result.success ? 'text-green-700' : 'text-red-700'}>
-          {result.message}
-        </span>
+
+        {/* Mostrar estadísticas parciales */}
+        {!result.success && (
+          <div className="mt-2 text-sm text-gray-600">
+            {details?.productos_parseados !== undefined && (
+              <p>Productos parseados: {details.productos_parseados} | Guardados: {details.productos_guardados || 0}</p>
+            )}
+            {details?.gastos_parseados !== undefined && (
+              <p>Gastos parseados: {details.gastos_parseados} | Guardados: {details.gastos_guardados || 0}</p>
+            )}
+          </div>
+        )}
+
+        {/* Mostrar warnings de parseo */}
+        {!result.success && details?.parseErrors && details.parseErrors.length > 0 && (
+          <div className="mt-2 rounded bg-yellow-100 p-3 text-sm">
+            <p className="font-medium text-yellow-800">Advertencias de parseo:</p>
+            <ul className="mt-1 list-inside list-disc text-yellow-700">
+              {details.parseErrors.slice(0, 5).map((err, i) => (
+                <li key={i}>{err}</li>
+              ))}
+              {details.parseErrors.length > 5 && (
+                <li>... y {details.parseErrors.length - 5} advertencias más</li>
+              )}
+            </ul>
+          </div>
+        )}
       </div>
     </Alert>
   );
