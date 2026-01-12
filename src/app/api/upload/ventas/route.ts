@@ -38,148 +38,100 @@ export async function POST(request: NextRequest) {
 
     const supabase = createAdminClient();
     const dbErrors: string[] = [];
+    const batchSize = 200; // Tamaño de lote más pequeño para evitar problemas
 
-    // 1. Insertar/actualizar subrubros
+    // 1. Upsert subrubros
     const subrubrosUnicos = [...new Set(parseResult.data.map((v) => v.subrubro).filter(Boolean))];
-    const { data: subrubrosExistentes, error: errSubrubrosSelect } = await supabase
-      .from('subrubros')
-      .select('id, nombre')
-      .in('nombre', subrubrosUnicos);
-
-    if (errSubrubrosSelect) {
-      dbErrors.push(`Error leyendo subrubros: ${errSubrubrosSelect.message}`);
-    }
-
     const subrubrosMap = new Map<string, number>();
-    (subrubrosExistentes || []).forEach((s) => subrubrosMap.set(s.nombre, s.id));
 
-    const subrubrosNuevos = subrubrosUnicos.filter((s) => !subrubrosMap.has(s));
-    if (subrubrosNuevos.length > 0) {
-      const { data: insertados, error: errSubrubrosInsert } = await supabase
-        .from('subrubros')
-        .insert(subrubrosNuevos.map((nombre) => ({ nombre })))
-        .select();
+    if (subrubrosUnicos.length > 0) {
+      const subrubrosData = subrubrosUnicos.map((nombre) => ({ nombre }));
 
-      if (errSubrubrosInsert) {
-        dbErrors.push(`Error insertando subrubros: ${errSubrubrosInsert.message}`);
+      for (let i = 0; i < subrubrosData.length; i += batchSize) {
+        const batch = subrubrosData.slice(i, i + batchSize);
+        const { data: upserted, error } = await supabase
+          .from('subrubros')
+          .upsert(batch, { onConflict: 'nombre' })
+          .select('id, nombre');
+
+        if (error) {
+          dbErrors.push(`Error upserting subrubros (lote ${i}): ${error.message}`);
+        }
+        (upserted || []).forEach((s) => subrubrosMap.set(s.nombre, s.id));
       }
-      (insertados || []).forEach((s) => subrubrosMap.set(s.nombre, s.id));
     }
 
-    // 2. Insertar/actualizar proveedores
+    // 2. Upsert proveedores
     const proveedoresUnicos = [
-      ...new Set(parseResult.data.map((v) => `${v.idproveedor}|${v.proveedor}`).filter(Boolean)),
+      ...new Set(parseResult.data.map((v) => `${v.idproveedor}|${v.proveedor}`).filter((p) => p && p.split('|')[0])),
     ];
-    const proveedoresCodigos = proveedoresUnicos.map((p) => p.split('|')[0]).filter(Boolean);
-
     const proveedoresMap = new Map<string, number>();
 
-    if (proveedoresCodigos.length > 0) {
-      const { data: proveedoresExistentes, error: errProvSelect } = await supabase
-        .from('proveedores')
-        .select('id, codigo, nombre')
-        .in('codigo', proveedoresCodigos);
-
-      if (errProvSelect) {
-        dbErrors.push(`Error leyendo proveedores: ${errProvSelect.message}`);
-      }
-      (proveedoresExistentes || []).forEach((p) => proveedoresMap.set(p.codigo, p.id));
-    }
-
-    const proveedoresNuevos = proveedoresUnicos
-      .filter((p) => {
-        const codigo = p.split('|')[0];
-        return codigo && !proveedoresMap.has(codigo);
-      })
-      .map((p) => {
+    if (proveedoresUnicos.length > 0) {
+      const proveedoresData = proveedoresUnicos.map((p) => {
         const [codigo, nombre] = p.split('|');
         return { codigo, nombre: nombre || codigo };
       });
 
-    if (proveedoresNuevos.length > 0) {
-      const { data: insertados, error: errProvInsert } = await supabase
-        .from('proveedores')
-        .insert(proveedoresNuevos)
-        .select();
+      for (let i = 0; i < proveedoresData.length; i += batchSize) {
+        const batch = proveedoresData.slice(i, i + batchSize);
+        const { data: upserted, error } = await supabase
+          .from('proveedores')
+          .upsert(batch, { onConflict: 'codigo' })
+          .select('id, codigo');
 
-      if (errProvInsert) {
-        dbErrors.push(`Error insertando proveedores: ${errProvInsert.message}`);
+        if (error) {
+          dbErrors.push(`Error upserting proveedores (lote ${i}): ${error.message}`);
+        }
+        (upserted || []).forEach((p) => proveedoresMap.set(p.codigo, p.id));
       }
-      (insertados || []).forEach((p) => proveedoresMap.set(p.codigo, p.id));
     }
 
-    // 3. Insertar/actualizar compradores
-    const compradoresUnicos = [
-      ...new Set(parseResult.data.map((v) => v.idcomprador).filter(Boolean)),
-    ];
+    // 3. Upsert compradores
+    const compradoresUnicos = [...new Set(parseResult.data.map((v) => v.idcomprador).filter(Boolean))];
     const compradoresMap = new Map<string, number>();
 
     if (compradoresUnicos.length > 0) {
-      const { data: compradoresExistentes, error: errCompSelect } = await supabase
-        .from('compradores')
-        .select('id, codigo')
-        .in('codigo', compradoresUnicos);
+      const compradoresData = compradoresUnicos.map((codigo) => ({ codigo }));
 
-      if (errCompSelect) {
-        dbErrors.push(`Error leyendo compradores: ${errCompSelect.message}`);
+      for (let i = 0; i < compradoresData.length; i += batchSize) {
+        const batch = compradoresData.slice(i, i + batchSize);
+        const { data: upserted, error } = await supabase
+          .from('compradores')
+          .upsert(batch, { onConflict: 'codigo' })
+          .select('id, codigo');
+
+        if (error) {
+          dbErrors.push(`Error upserting compradores (lote ${i}): ${error.message}`);
+        }
+        (upserted || []).forEach((c) => compradoresMap.set(c.codigo, c.id));
       }
-      (compradoresExistentes || []).forEach((c) => compradoresMap.set(c.codigo, c.id));
     }
 
-    const compradoresNuevos = compradoresUnicos
-      .filter((c) => c && !compradoresMap.has(c))
-      .map((codigo) => ({ codigo }));
-
-    if (compradoresNuevos.length > 0) {
-      const { data: insertados, error: errCompInsert } = await supabase
-        .from('compradores')
-        .insert(compradoresNuevos)
-        .select();
-
-      if (errCompInsert) {
-        dbErrors.push(`Error insertando compradores: ${errCompInsert.message}`);
-      }
-      (insertados || []).forEach((c) => compradoresMap.set(c.codigo, c.id));
-    }
-
-    // 4. Insertar/actualizar categorías
-    const categoriasUnicas = [
-      ...new Set(parseResult.data.map((v) => v.idcategoria).filter(Boolean)),
-    ];
+    // 4. Upsert categorías
+    const categoriasUnicas = [...new Set(parseResult.data.map((v) => v.idcategoria).filter(Boolean))];
     const categoriasMap = new Map<string, number>();
 
     if (categoriasUnicas.length > 0) {
-      const { data: categoriasExistentes, error: errCatSelect } = await supabase
-        .from('categorias')
-        .select('id, codigo')
-        .in('codigo', categoriasUnicas);
+      const categoriasData = categoriasUnicas.map((codigo) => ({ codigo }));
 
-      if (errCatSelect) {
-        dbErrors.push(`Error leyendo categorías: ${errCatSelect.message}`);
+      for (let i = 0; i < categoriasData.length; i += batchSize) {
+        const batch = categoriasData.slice(i, i + batchSize);
+        const { data: upserted, error } = await supabase
+          .from('categorias')
+          .upsert(batch, { onConflict: 'codigo' })
+          .select('id, codigo');
+
+        if (error) {
+          dbErrors.push(`Error upserting categorías (lote ${i}): ${error.message}`);
+        }
+        (upserted || []).forEach((c) => categoriasMap.set(c.codigo, c.id));
       }
-      (categoriasExistentes || []).forEach((c) => categoriasMap.set(c.codigo, c.id));
     }
 
-    const categoriasNuevas = categoriasUnicas
-      .filter((c) => c && !categoriasMap.has(c))
-      .map((codigo) => ({ codigo }));
-
-    if (categoriasNuevas.length > 0) {
-      const { data: insertadas, error: errCatInsert } = await supabase
-        .from('categorias')
-        .insert(categoriasNuevas)
-        .select();
-
-      if (errCatInsert) {
-        dbErrors.push(`Error insertando categorías: ${errCatInsert.message}`);
-      }
-      (insertadas || []).forEach((c) => categoriasMap.set(c.codigo, c.id));
-    }
-
-    // 5. Insertar/actualizar productos usando upsert
+    // 5. Upsert productos
     const productosMap = new Map<string, number>();
 
-    // Preparar todos los productos (upsert manejará duplicados)
     const productosData = parseResult.data
       .filter((v) => v.idproducto)
       .map((v) => ({
@@ -192,29 +144,25 @@ export async function POST(request: NextRequest) {
         categoria_id: categoriasMap.get(v.idcategoria) || null,
       }));
 
-    // Eliminar duplicados por codigo (mantener el último)
+    // Eliminar duplicados por codigo
     const productosUnicos = Array.from(
       new Map(productosData.map((p) => [p.codigo, p])).values()
     );
 
     console.log(`Upserting ${productosUnicos.length} productos`);
 
-    if (productosUnicos.length > 0) {
-      // Upsert en lotes de 500
-      const batchSize = 500;
-      for (let i = 0; i < productosUnicos.length; i += batchSize) {
-        const batch = productosUnicos.slice(i, i + batchSize);
-        const { data: upserted, error: errProdUpsert } = await supabase
-          .from('productos')
-          .upsert(batch, { onConflict: 'codigo' })
-          .select('id, codigo');
+    for (let i = 0; i < productosUnicos.length; i += batchSize) {
+      const batch = productosUnicos.slice(i, i + batchSize);
+      const { data: upserted, error } = await supabase
+        .from('productos')
+        .upsert(batch, { onConflict: 'codigo' })
+        .select('id, codigo');
 
-        if (errProdUpsert) {
-          dbErrors.push(`Error upserting productos (lote ${i}): ${errProdUpsert.message}`);
-          console.error('Error upserting productos:', errProdUpsert);
-        }
-        (upserted || []).forEach((p) => productosMap.set(p.codigo, p.id));
+      if (error) {
+        dbErrors.push(`Error upserting productos (lote ${i}): ${error.message}`);
+        console.error('Error upserting productos:', error);
       }
+      (upserted || []).forEach((p) => productosMap.set(p.codigo, p.id));
     }
 
     console.log(`Total productos en mapa: ${productosMap.size}`);
@@ -259,7 +207,6 @@ export async function POST(request: NextRequest) {
     console.log(`Insertando ${metricasData.length} métricas`);
 
     // Insertar en lotes
-    const batchSize = 500;
     let metricasInsertadas = 0;
     for (let i = 0; i < metricasData.length; i += batchSize) {
       const batch = metricasData.slice(i, i + batchSize);
