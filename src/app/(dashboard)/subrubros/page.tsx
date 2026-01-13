@@ -22,6 +22,7 @@ interface SubrubroData {
   markup_promedio: number;
   gasto_total: number;
   gasto_sobre_venta_pct: number;
+  markup_min: number;
   resultado: number;
   en_perdida: boolean;
   pct_facturacion: number;
@@ -100,6 +101,7 @@ export default function SubrubrosPage() {
       if (filters.orderBy === 'resultado') return (a.resultado - b.resultado) * mult;
       if (filters.orderBy === 'facturacion') return (a.facturacion - b.facturacion) * mult;
       if (filters.orderBy === 'gasto_sobre_venta') return (a.gasto_sobre_venta_pct - b.gasto_sobre_venta_pct) * mult;
+      if (filters.orderBy === 'markup_min') return ((a.markup_min || 0) - (b.markup_min || 0)) * mult;
       if (filters.orderBy === 'productos') return (a.total_productos - b.total_productos) * mult;
       return 0;
     });
@@ -266,6 +268,15 @@ export default function SubrubrosPage() {
                     </TableHead>
                     <TableHead
                       className="cursor-pointer text-right"
+                      onClick={() => handleSort('markup_min')}
+                    >
+                      <div className="flex items-center justify-end gap-1">
+                        Markup Mín %
+                        <ArrowUpDown className="h-4 w-4" />
+                      </div>
+                    </TableHead>
+                    <TableHead
+                      className="cursor-pointer text-right"
                       onClick={() => handleSort('resultado')}
                     >
                       <div className="flex items-center justify-end gap-1">
@@ -303,6 +314,11 @@ export default function SubrubrosPage() {
                       <TableCell className="text-right">
                         <span className={subrubro.gasto_sobre_venta_pct > 100 ? 'text-red-600 font-medium' : ''}>
                           {subrubro.gasto_sobre_venta_pct.toFixed(1)}%
+                        </span>
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <span className={subrubro.markup_min > 100 ? 'text-amber-600 font-medium' : ''}>
+                          {(subrubro.markup_min || 0).toFixed(1)}%
                         </span>
                       </TableCell>
                       <TableCell className="text-right">
