@@ -140,23 +140,55 @@ export async function GET(request: NextRequest) {
     evolucion_6_meses.sort((a, b) => a.periodo.localeCompare(b.periodo));
 
     // 4. Calcular top subrubros con metodología correcta (agregar primero, luego calcular gastos)
-    // Obtener productos con métricas para el período
-    const { data: productosData } = await supabase
-      .from('productos')
-      .select(`
-        id,
-        empresa,
-        subrubro_id,
-        subrubros(id, nombre),
-        metricas_producto!inner(
-          importe_ventas,
-          importe_costo,
-          stock_volumen,
-          stock_costo,
-          margen_bruto
-        )
-      `)
-      .eq('metricas_producto.periodo', periodoActual);
+    // Obtener TODOS los productos con paginación (Supabase limita a 1000 por defecto)
+    type ProductoData = {
+      id: number;
+      empresa: string;
+      subrubro_id: number | null;
+      subrubros: { id: number; nombre: string } | { id: number; nombre: string }[] | null;
+      metricas_producto: {
+        importe_ventas: number;
+        importe_costo: number;
+        stock_volumen: number;
+        stock_costo: number;
+        margen_bruto: number;
+      }[];
+    };
+
+    let allProductosData: ProductoData[] = [];
+    let dashPage = 0;
+    const dashPageSize = 1000;
+    let dashHasMore = true;
+
+    while (dashHasMore) {
+      const { data: pageData } = await supabase
+        .from('productos')
+        .select(`
+          id,
+          empresa,
+          subrubro_id,
+          subrubros(id, nombre),
+          metricas_producto!inner(
+            importe_ventas,
+            importe_costo,
+            stock_volumen,
+            stock_costo,
+            margen_bruto
+          )
+        `)
+        .eq('metricas_producto.periodo', periodoActual)
+        .range(dashPage * dashPageSize, (dashPage + 1) * dashPageSize - 1);
+
+      if (pageData && pageData.length > 0) {
+        allProductosData = [...allProductosData, ...(pageData as ProductoData[])];
+        dashHasMore = pageData.length === dashPageSize;
+        dashPage++;
+      } else {
+        dashHasMore = false;
+      }
+    }
+
+    const productosData = allProductosData;
 
     // Calcular totales del período
     // IMPORTANTE: TOTAL_MARGEN solo suma valores POSITIVOS

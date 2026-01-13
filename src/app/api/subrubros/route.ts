@@ -27,29 +27,64 @@ export async function GET(request: NextRequest) {
     }
 
     // 2. Obtener TODOS los productos con sus métricas y subrubros
-    const { data: productos, error: errorProductos } = await supabase
-      .from('productos')
-      .select(`
-        id,
-        codigo,
-        empresa,
-        subrubro_id,
-        subrubros(id, nombre),
-        metricas_producto!inner(
-          importe_ventas,
-          importe_costo,
-          stock_volumen,
-          stock_costo,
-          margen_bruto,
-          markup_pct
-        )
-      `)
-      .eq('metricas_producto.periodo', periodoActual);
+    // IMPORTANTE: Supabase limita a 1000 filas por defecto, necesitamos paginar
+    type ProductoConMetricas = {
+      id: number;
+      codigo: string;
+      empresa: string;
+      subrubro_id: number | null;
+      subrubros: { id: number; nombre: string } | { id: number; nombre: string }[] | null;
+      metricas_producto: {
+        importe_ventas: number;
+        importe_costo: number;
+        stock_volumen: number;
+        stock_costo: number;
+        margen_bruto: number;
+        markup_pct: number;
+      }[];
+    };
 
-    if (errorProductos) {
-      console.error('Error obteniendo productos:', errorProductos);
-      return NextResponse.json({ error: 'Error obteniendo datos' }, { status: 500 });
+    let allProductos: ProductoConMetricas[] = [];
+    let page = 0;
+    const pageSize = 1000;
+    let hasMore = true;
+
+    while (hasMore) {
+      const { data: pageData, error: pageError } = await supabase
+        .from('productos')
+        .select(`
+          id,
+          codigo,
+          empresa,
+          subrubro_id,
+          subrubros(id, nombre),
+          metricas_producto!inner(
+            importe_ventas,
+            importe_costo,
+            stock_volumen,
+            stock_costo,
+            margen_bruto,
+            markup_pct
+          )
+        `)
+        .eq('metricas_producto.periodo', periodoActual)
+        .range(page * pageSize, (page + 1) * pageSize - 1);
+
+      if (pageError) {
+        console.error('Error obteniendo productos página', page, pageError);
+        return NextResponse.json({ error: 'Error obteniendo datos' }, { status: 500 });
+      }
+
+      if (pageData && pageData.length > 0) {
+        allProductos = [...allProductos, ...pageData];
+        hasMore = pageData.length === pageSize;
+        page++;
+      } else {
+        hasMore = false;
+      }
     }
+
+    const productos = allProductos;
 
     // 3. Calcular TOTALES del período (para los porcentajes)
     // IMPORTANTE: TOTAL_MARGEN solo suma valores POSITIVOS (para que los % sumen 100%)
