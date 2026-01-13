@@ -12,7 +12,6 @@ export async function GET(request: NextRequest) {
     const busqueda = searchParams.get('busqueda') || '';
     const page = parseInt(searchParams.get('page') || '1');
     const limit = parseInt(searchParams.get('limit') || '50');
-    const orderBy = searchParams.get('orderBy') || 'resultado';
     const orderDir = searchParams.get('orderDir') || 'asc';
 
     const supabase = createAdminClient();
@@ -34,49 +33,11 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    // Construir query base
+    // Query simple sin nested joins problemáticos
     let query = supabase
       .from('analisis_producto')
-      .select(
-        `
-        *,
-        producto:productos!inner(
-          id,
-          codigo,
-          nombre,
-          empresa,
-          subrubro:subrubros(id, nombre),
-          proveedor:proveedores(id, codigo, nombre),
-          comprador:compradores(id, codigo, nombre),
-          categoria:categorias(id, codigo, nombre)
-        ),
-        metricas:metricas_producto!inner(
-          importe_ventas,
-          importe_costo,
-          margen_bruto,
-          markup_pct,
-          stock_unidades,
-          stock_costo,
-          stock_volumen
-        )
-      `,
-        { count: 'exact' }
-      )
-      .eq('periodo', periodoActual)
-      .eq('metricas.periodo', periodoActual);
-
-    // Filtros
-    if (empresa !== 'todas') {
-      query = query.eq('producto.empresa', empresa);
-    }
-
-    if (subrubroIds.length > 0) {
-      query = query.in('producto.subrubro_id', subrubroIds.map(Number));
-    }
-
-    if (proveedorIds.length > 0) {
-      query = query.in('producto.proveedor_id', proveedorIds.map(Number));
-    }
+      .select('*', { count: 'exact' })
+      .eq('periodo', periodoActual);
 
     if (estado === 'perdida') {
       query = query.eq('en_perdida', true);
@@ -84,76 +45,139 @@ export async function GET(request: NextRequest) {
       query = query.eq('en_perdida', false);
     }
 
-    if (busqueda) {
-      query = query.or(
-        `producto.nombre.ilike.%${busqueda}%,producto.codigo.ilike.%${busqueda}%`
-      );
-    }
-
-    // Ordenamiento
+    // Ordenar por resultado
     const ascending = orderDir === 'asc';
-    if (orderBy === 'resultado') {
-      query = query.order('resultado', { ascending });
-    } else if (orderBy === 'ventas') {
-      query = query.order('metricas.importe_ventas', { ascending, referencedTable: 'metricas' });
-    } else if (orderBy === 'markup') {
-      query = query.order('metricas.markup_pct', { ascending, referencedTable: 'metricas' });
-    }
+    query = query.order('resultado', { ascending });
 
     // Paginación
     const offset = (page - 1) * limit;
     query = query.range(offset, offset + limit - 1);
 
-    const { data, error, count } = await query;
+    const { data: analisisData, error: analisisError, count } = await query;
 
-    if (error) {
-      console.error('Error obteniendo productos:', error);
-      return NextResponse.json({ error: 'Error obteniendo productos', details: error.message }, { status: 500 });
+    if (analisisError) {
+      console.error('Error obteniendo analisis:', analisisError);
+      return NextResponse.json({ error: 'Error obteniendo productos', details: analisisError.message }, { status: 500 });
     }
 
-    const total = count || 0;
-    const pages = Math.ceil(total / limit);
+    if (!analisisData || analisisData.length === 0) {
+      return NextResponse.json({
+        data: [],
+        pagination: { total: 0, page: 1, pages: 0, hasMore: false },
+        periodo: periodoActual,
+      });
+    }
+
+    // Obtener IDs de productos
+    const productoIds = analisisData.map(a => a.producto_id);
+
+    // Buscar productos
+    const { data: productosData } = await supabase
+      .from('productos')
+      .select('id, codigo, nombre, empresa, subrubro_id, proveedor_id')
+      .in('id', productoIds);
+
+    const productosMap: Record<number, {
+      codigo: string;
+      nombre: string;
+      empresa: string;
+      subrubro_id: number | null;
+      proveedor_id: number | null;
+    }> = {};
+    (productosData || []).forEach(p => {
+      productosMap[p.id] = p;
+    });
+
+    // Buscar métricas
+    const { data: metricasData } = await supabase
+      .from('metricas_producto')
+      .select('producto_id, importe_ventas, markup_pct')
+      .eq('periodo', periodoActual)
+      .in('producto_id', productoIds);
+
+    const metricasMap: Record<number, { importe_ventas: number; markup_pct: number }> = {};
+    (metricasData || []).forEach(m => {
+      metricasMap[m.producto_id] = {
+        importe_ventas: m.importe_ventas || 0,
+        markup_pct: m.markup_pct || 0,
+      };
+    });
+
+    // Buscar subrubros y proveedores
+    const subrubroIdsToFetch = [...new Set((productosData || []).map(p => p.subrubro_id).filter(Boolean))];
+    const proveedorIdsToFetch = [...new Set((productosData || []).map(p => p.proveedor_id).filter(Boolean))];
+
+    const subrubrosMap: Record<number, string> = {};
+    const proveedoresMap: Record<number, string> = {};
+
+    if (subrubroIdsToFetch.length > 0) {
+      const { data: subrubrosData } = await supabase
+        .from('subrubros')
+        .select('id, nombre')
+        .in('id', subrubroIdsToFetch);
+      (subrubrosData || []).forEach(s => {
+        subrubrosMap[s.id] = s.nombre;
+      });
+    }
+
+    if (proveedorIdsToFetch.length > 0) {
+      const { data: proveedoresData } = await supabase
+        .from('proveedores')
+        .select('id, nombre')
+        .in('id', proveedorIdsToFetch);
+      (proveedoresData || []).forEach(p => {
+        proveedoresMap[p.id] = p.nombre;
+      });
+    }
 
     // Formatear respuesta
-    const formattedData = (data || []).map((item) => {
-      // Handle producto - might be object or array
-      const prodRaw = item.producto;
-      const prod = Array.isArray(prodRaw) ? prodRaw[0] : prodRaw;
-
-      // Handle metricas - might be object or array
-      const metricasRaw = item.metricas;
-      const metricas = Array.isArray(metricasRaw) ? metricasRaw[0] : metricasRaw;
-
-      // Handle nested relations that might be arrays
-      const subrubro = prod?.subrubro;
-      const subrubroObj = Array.isArray(subrubro) ? subrubro[0] : subrubro;
-      const proveedor = prod?.proveedor;
-      const proveedorObj = Array.isArray(proveedor) ? proveedor[0] : proveedor;
+    let formattedData = analisisData.map((item) => {
+      const prod = productosMap[item.producto_id] || {};
+      const metricas = metricasMap[item.producto_id] || { importe_ventas: 0, markup_pct: 0 };
 
       return {
         id: item.id,
         producto_id: item.producto_id,
         periodo: item.periodo,
-        codigo: prod?.codigo || '',
-        nombre: prod?.nombre || '',
-        empresa: prod?.empresa || '',
-        subrubro: subrubroObj?.nombre || '',
-        subrubro_id: subrubroObj?.id || null,
-        proveedor: proveedorObj?.nombre || '',
-        proveedor_id: proveedorObj?.id || null,
-        importe_ventas: metricas?.importe_ventas || 0,
-        importe_costo: metricas?.importe_costo || 0,
-        margen_bruto: metricas?.margen_bruto || 0,
-        markup_pct: metricas?.markup_pct || 0,
+        codigo: prod.codigo || '',
+        nombre: prod.nombre || '',
+        empresa: prod.empresa || '',
+        subrubro: subrubrosMap[prod.subrubro_id as number] || '',
+        subrubro_id: prod.subrubro_id || null,
+        proveedor: proveedoresMap[prod.proveedor_id as number] || '',
+        proveedor_id: prod.proveedor_id || null,
+        importe_ventas: metricas.importe_ventas,
+        markup_pct: metricas.markup_pct,
         markup_minimo_pct: item.markup_minimo_pct || 0,
-        stock_unidades: metricas?.stock_unidades || 0,
-        stock_costo: metricas?.stock_costo || 0,
         gasto_total: item.gasto_total || 0,
         resultado: item.resultado || 0,
         en_perdida: item.en_perdida || false,
         cumple_objetivo: item.cumple_objetivo || false,
       };
     });
+
+    // Filtrar por empresa, subrubro, proveedor y búsqueda
+    if (empresa !== 'todas') {
+      formattedData = formattedData.filter(p => p.empresa === empresa);
+    }
+    if (subrubroIds.length > 0) {
+      const ids = subrubroIds.map(Number);
+      formattedData = formattedData.filter(p => p.subrubro_id && ids.includes(p.subrubro_id));
+    }
+    if (proveedorIds.length > 0) {
+      const ids = proveedorIds.map(Number);
+      formattedData = formattedData.filter(p => p.proveedor_id && ids.includes(p.proveedor_id));
+    }
+    if (busqueda) {
+      const searchLower = busqueda.toLowerCase();
+      formattedData = formattedData.filter(p =>
+        p.nombre.toLowerCase().includes(searchLower) ||
+        p.codigo.toLowerCase().includes(searchLower)
+      );
+    }
+
+    const total = count || 0;
+    const pages = Math.ceil(total / limit);
 
     return NextResponse.json({
       data: formattedData,
