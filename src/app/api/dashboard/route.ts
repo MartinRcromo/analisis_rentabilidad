@@ -150,18 +150,38 @@ export async function GET(request: NextRequest) {
       subrubrosFiltrados = subrubrosFiltrados.filter((s: { empresa: string }) => s.empresa === empresa);
     }
 
+    // Tipo para subrubros con markup
+    type SubrubroConMarkup = {
+      subrubro: string;
+      empresa: string;
+      total_productos: number;
+      resultado: number;
+      markup_actual: number;
+      markup_min: number;
+    };
+
     // Top 10 peores (ya viene ordenado por resultado ASC)
-    const topPeoresData = subrubrosFiltrados.slice(0, 10).map((s: { subrubro: string; empresa: string; total_productos: number; resultado: number }) => ({
+    const topPeoresData = subrubrosFiltrados.slice(0, 10).map((s: SubrubroConMarkup) => ({
       subrubro: s.subrubro,
       empresa: s.empresa,
       total_productos: Number(s.total_productos),
       resultado: Number(s.resultado),
+      markup_actual: Number(s.markup_actual) || 0,
+      markup_min: Number(s.markup_min) || 0,
     }));
 
     // Top 10 mejores (mayor resultado - invertir el orden)
     const topMejoresData = [...subrubrosFiltrados]
       .sort((a: { resultado: number }, b: { resultado: number }) => Number(b.resultado) - Number(a.resultado))
-      .slice(0, 10);
+      .slice(0, 10)
+      .map((s: SubrubroConMarkup) => ({
+        subrubro: s.subrubro,
+        empresa: s.empresa,
+        total_productos: Number(s.total_productos),
+        resultado: Number(s.resultado),
+        markup_actual: Number(s.markup_actual) || 0,
+        markup_min: Number(s.markup_min) || 0,
+      }));
 
     return NextResponse.json({
       periodo: periodoActual,

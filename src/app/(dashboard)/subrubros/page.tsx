@@ -8,7 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
-import { Search, ArrowUpDown, FolderTree, TrendingDown, TrendingUp, DollarSign } from 'lucide-react';
+import { Search, ArrowUpDown, FolderTree, TrendingDown, TrendingUp, DollarSign, AlertTriangle } from 'lucide-react';
 import Link from 'next/link';
 
 interface SubrubroData {
@@ -19,14 +19,12 @@ interface SubrubroData {
   facturacion: number;
   costo: number;
   margen_bruto: number;
-  markup_promedio: number;
   gasto_total: number;
   gasto_sobre_venta_pct: number;
+  markup_actual: number;
   markup_min: number;
   resultado: number;
   en_perdida: boolean;
-  pct_facturacion: number;
-  pct_volumen: number;
 }
 
 interface ApiResponse {
@@ -101,6 +99,7 @@ export default function SubrubrosPage() {
       if (filters.orderBy === 'resultado') return (a.resultado - b.resultado) * mult;
       if (filters.orderBy === 'facturacion') return (a.facturacion - b.facturacion) * mult;
       if (filters.orderBy === 'gasto_sobre_venta') return (a.gasto_sobre_venta_pct - b.gasto_sobre_venta_pct) * mult;
+      if (filters.orderBy === 'markup_actual') return ((a.markup_actual || 0) - (b.markup_actual || 0)) * mult;
       if (filters.orderBy === 'markup_min') return ((a.markup_min || 0) - (b.markup_min || 0)) * mult;
       if (filters.orderBy === 'productos') return (a.total_productos - b.total_productos) * mult;
       return 0;
@@ -123,59 +122,67 @@ export default function SubrubrosPage() {
   const subrubrosPerdida = filteredData.filter((s) => s.en_perdida).length;
   const totalResultado = filteredData.reduce((sum, s) => sum + s.resultado, 0);
 
+  // Markup comparison helper
+  const getMarkupStatus = (actual: number, min: number) => {
+    if (!actual || !min) return 'neutral';
+    if (actual >= min) return 'good';
+    return 'bad';
+  };
+
   return (
-    <div className="p-6">
-      <div className="mb-6">
-        <h1 className="flex items-center gap-2 text-2xl font-bold">
-          <FolderTree className="h-6 w-6" />
+    <div className="p-3 sm:p-6">
+      {/* Header */}
+      <div className="mb-4 sm:mb-6">
+        <h1 className="flex items-center gap-2 text-xl sm:text-2xl font-bold">
+          <FolderTree className="h-5 w-5 sm:h-6 sm:w-6" />
           Análisis por Subrubro
         </h1>
-        <p className="text-gray-500">
-          Rentabilidad agregada por categoría de producto
-          {periodo && ` - Período: ${new Date(periodo).toLocaleDateString('es-AR', { month: 'long', year: 'numeric' })}`}
+        <p className="text-sm sm:text-base text-gray-500">
+          Rentabilidad por categoría
+          {periodo && ` - ${new Date(periodo).toLocaleDateString('es-AR', { month: 'short', year: 'numeric' })}`}
         </p>
       </div>
 
-      {/* Resumen */}
+      {/* Resumen - Cards */}
       {totales && (
-        <div className="mb-6 grid grid-cols-1 gap-4 md:grid-cols-4">
+        <div className="mb-4 sm:mb-6 grid grid-cols-2 gap-2 sm:gap-4 lg:grid-cols-4">
           <Card>
-            <CardContent className="p-4">
-              <div className="flex items-center gap-2 text-sm text-gray-500">
-                <FolderTree className="h-4 w-4" />
-                Total Subrubros
+            <CardContent className="p-3 sm:p-4">
+              <div className="flex items-center gap-1 sm:gap-2 text-xs sm:text-sm text-gray-500">
+                <FolderTree className="h-3 w-3 sm:h-4 sm:w-4" />
+                <span className="hidden sm:inline">Total </span>Subrubros
               </div>
-              <div className="mt-1 text-2xl font-bold">{totales.total_subrubros}</div>
+              <div className="mt-1 text-lg sm:text-2xl font-bold">{totales.total_subrubros}</div>
             </CardContent>
           </Card>
           <Card className="border-red-200 bg-red-50">
-            <CardContent className="p-4">
-              <div className="flex items-center gap-2 text-sm text-red-600">
-                <TrendingDown className="h-4 w-4" />
+            <CardContent className="p-3 sm:p-4">
+              <div className="flex items-center gap-1 sm:gap-2 text-xs sm:text-sm text-red-600">
+                <TrendingDown className="h-3 w-3 sm:h-4 sm:w-4" />
                 En Pérdida
               </div>
-              <div className="mt-1 text-2xl font-bold text-red-600">{subrubrosPerdida}</div>
-              <div className="text-sm text-red-500">
-                {((subrubrosPerdida / filteredData.length) * 100).toFixed(1)}% del total
+              <div className="mt-1 text-lg sm:text-2xl font-bold text-red-600">{subrubrosPerdida}</div>
+              <div className="text-xs text-red-500">
+                {filteredData.length > 0 ? ((subrubrosPerdida / filteredData.length) * 100).toFixed(0) : 0}%
               </div>
             </CardContent>
           </Card>
           <Card>
-            <CardContent className="p-4">
-              <div className="flex items-center gap-2 text-sm text-gray-500">
-                <DollarSign className="h-4 w-4" />
-                Gastos Asignados
+            <CardContent className="p-3 sm:p-4">
+              <div className="flex items-center gap-1 sm:gap-2 text-xs sm:text-sm text-gray-500">
+                <DollarSign className="h-3 w-3 sm:h-4 sm:w-4" />
+                Gastos
               </div>
-              <div className="mt-1 text-2xl font-bold">{formatCurrency(gastos?.total || 0)}</div>
+              <div className="mt-1 text-lg sm:text-2xl font-bold">{formatCurrency(gastos?.total || 0)}</div>
             </CardContent>
           </Card>
           <Card className={totalResultado >= 0 ? 'border-green-200 bg-green-50' : 'border-red-200 bg-red-50'}>
-            <CardContent className="p-4">
-              <div className={`flex items-center gap-2 text-sm ${totalResultado >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                {totalResultado >= 0 ? <TrendingUp className="h-4 w-4" /> : <TrendingDown className="h-4 w-4" />}
-                Resultado Total
+            <CardContent className="p-3 sm:p-4">
+              <div className={`flex items-center gap-1 sm:gap-2 text-xs sm:text-sm ${totalResultado >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                {totalResultado >= 0 ? <TrendingUp className="h-3 w-3 sm:h-4 sm:w-4" /> : <TrendingDown className="h-3 w-3 sm:h-4 sm:w-4" />}
+                Resultado
               </div>
-              <div className={`mt-1 text-2xl font-bold ${totalResultado >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+              <div className={`mt-1 text-lg sm:text-2xl font-bold ${totalResultado >= 0 ? 'text-green-600' : 'text-red-600'}`}>
                 {formatCurrency(totalResultado)}
               </div>
             </CardContent>
@@ -184,35 +191,37 @@ export default function SubrubrosPage() {
       )}
 
       {/* Filtros */}
-      <Card className="mb-6">
-        <CardContent className="p-4">
-          <div className="flex flex-wrap items-center gap-4">
-            <div className="flex items-center gap-2">
+      <Card className="mb-4 sm:mb-6">
+        <CardContent className="p-3 sm:p-4">
+          <div className="flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-4">
+            <div className="flex items-center gap-2 flex-1">
               <Search className="h-4 w-4 text-gray-400" />
               <Input
                 placeholder="Buscar subrubro..."
                 value={filters.busqueda}
                 onChange={(e) => setFilters((prev) => ({ ...prev, busqueda: e.target.value }))}
-                className="w-64"
+                className="w-full sm:w-64"
               />
             </div>
 
-            <Select
-              value={filters.empresa}
-              onValueChange={(v) => setFilters((prev) => ({ ...prev, empresa: v }))}
-            >
-              <SelectTrigger className="w-32">
-                <SelectValue placeholder="Empresa" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="todas">Todas</SelectItem>
-                <SelectItem value="Cromo">Cromo</SelectItem>
-                <SelectItem value="BBA">BBA</SelectItem>
-              </SelectContent>
-            </Select>
+            <div className="flex items-center gap-3">
+              <Select
+                value={filters.empresa}
+                onValueChange={(v) => setFilters((prev) => ({ ...prev, empresa: v }))}
+              >
+                <SelectTrigger className="w-28 sm:w-32">
+                  <SelectValue placeholder="Empresa" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="todas">Todas</SelectItem>
+                  <SelectItem value="Cromo">Cromo</SelectItem>
+                  <SelectItem value="BBA">BBA</SelectItem>
+                </SelectContent>
+              </Select>
 
-            <div className="ml-auto text-sm text-gray-500">
-              Mostrando {filteredData.length} subrubros
+              <span className="text-xs sm:text-sm text-gray-500 whitespace-nowrap">
+                {filteredData.length} subrubros
+              </span>
             </div>
           </div>
         </CardContent>
@@ -220,12 +229,12 @@ export default function SubrubrosPage() {
 
       {/* Tabla */}
       <Card>
-        <CardHeader>
-          <CardTitle>Subrubros ({filteredData.length})</CardTitle>
+        <CardHeader className="p-3 sm:p-6">
+          <CardTitle className="text-base sm:text-lg">Subrubros ({filteredData.length})</CardTitle>
         </CardHeader>
-        <CardContent>
+        <CardContent className="p-0 sm:p-6 sm:pt-0">
           {loading ? (
-            <div className="space-y-2">
+            <div className="space-y-2 p-4">
               {[...Array(10)].map((_, i) => (
                 <Skeleton key={i} className="h-12" />
               ))}
@@ -235,15 +244,15 @@ export default function SubrubrosPage() {
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>Subrubro</TableHead>
-                    <TableHead>Empresa</TableHead>
+                    <TableHead className="min-w-[150px]">Subrubro</TableHead>
+                    <TableHead className="hidden sm:table-cell">Emp.</TableHead>
                     <TableHead
-                      className="cursor-pointer text-right"
+                      className="cursor-pointer text-right hidden md:table-cell"
                       onClick={() => handleSort('productos')}
                     >
                       <div className="flex items-center justify-end gap-1">
-                        Productos
-                        <ArrowUpDown className="h-4 w-4" />
+                        Prod.
+                        <ArrowUpDown className="h-3 w-3" />
                       </div>
                     </TableHead>
                     <TableHead
@@ -251,19 +260,20 @@ export default function SubrubrosPage() {
                       onClick={() => handleSort('facturacion')}
                     >
                       <div className="flex items-center justify-end gap-1">
-                        Facturación
-                        <ArrowUpDown className="h-4 w-4" />
+                        <span className="hidden sm:inline">Facturación</span>
+                        <span className="sm:hidden">Fact.</span>
+                        <ArrowUpDown className="h-3 w-3" />
                       </div>
                     </TableHead>
-                    <TableHead className="text-right">Margen</TableHead>
-                    <TableHead className="text-right">Gasto</TableHead>
+                    <TableHead className="text-right hidden lg:table-cell">Gasto</TableHead>
                     <TableHead
                       className="cursor-pointer text-right"
-                      onClick={() => handleSort('gasto_sobre_venta')}
+                      onClick={() => handleSort('markup_actual')}
                     >
                       <div className="flex items-center justify-end gap-1">
-                        Gasto/Venta %
-                        <ArrowUpDown className="h-4 w-4" />
+                        <span className="hidden sm:inline">Markup</span>
+                        <span className="sm:hidden">MU</span>
+                        <ArrowUpDown className="h-3 w-3" />
                       </div>
                     </TableHead>
                     <TableHead
@@ -271,8 +281,9 @@ export default function SubrubrosPage() {
                       onClick={() => handleSort('markup_min')}
                     >
                       <div className="flex items-center justify-end gap-1">
-                        Markup Mín %
-                        <ArrowUpDown className="h-4 w-4" />
+                        <span className="hidden sm:inline">MU Mín</span>
+                        <span className="sm:hidden">Min</span>
+                        <ArrowUpDown className="h-3 w-3" />
                       </div>
                     </TableHead>
                     <TableHead
@@ -280,65 +291,81 @@ export default function SubrubrosPage() {
                       onClick={() => handleSort('resultado')}
                     >
                       <div className="flex items-center justify-end gap-1">
-                        Resultado
-                        <ArrowUpDown className="h-4 w-4" />
+                        <span className="hidden sm:inline">Resultado</span>
+                        <span className="sm:hidden">Res.</span>
+                        <ArrowUpDown className="h-3 w-3" />
                       </div>
                     </TableHead>
-                    <TableHead className="text-center">Acciones</TableHead>
+                    <TableHead className="text-center hidden sm:table-cell">Ver</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {filteredData.map((subrubro, idx) => (
-                    <TableRow
-                      key={`${subrubro.subrubro}-${subrubro.empresa}-${idx}`}
-                      className={subrubro.en_perdida ? 'bg-red-50' : ''}
-                    >
-                      <TableCell className="max-w-[200px] truncate font-medium" title={subrubro.subrubro}>
-                        {subrubro.subrubro}
-                      </TableCell>
-                      <TableCell>
-                        <Badge variant={subrubro.empresa === 'Cromo' ? 'default' : 'secondary'}>
-                          {subrubro.empresa}
-                        </Badge>
-                      </TableCell>
-                      <TableCell className="text-right">{subrubro.total_productos}</TableCell>
-                      <TableCell className="text-right">
-                        {formatCurrency(subrubro.facturacion)}
-                      </TableCell>
-                      <TableCell className="text-right">
-                        {formatCurrency(subrubro.margen_bruto)}
-                      </TableCell>
-                      <TableCell className="text-right">
-                        {formatCurrency(subrubro.gasto_total)}
-                      </TableCell>
-                      <TableCell className="text-right">
-                        <span className={subrubro.gasto_sobre_venta_pct > 100 ? 'text-red-600 font-medium' : ''}>
-                          {subrubro.gasto_sobre_venta_pct.toFixed(1)}%
-                        </span>
-                      </TableCell>
-                      <TableCell className="text-right">
-                        <span className={subrubro.markup_min > 100 ? 'text-amber-600 font-medium' : ''}>
-                          {(subrubro.markup_min || 0).toFixed(1)}%
-                        </span>
-                      </TableCell>
-                      <TableCell className="text-right">
-                        <span
-                          className={`font-medium ${subrubro.en_perdida ? 'text-red-600' : 'text-green-600'}`}
-                        >
-                          {formatCurrency(subrubro.resultado)}
-                        </span>
-                      </TableCell>
-                      <TableCell className="text-center">
-                        <Button asChild size="sm" variant="ghost">
+                  {filteredData.map((subrubro, idx) => {
+                    const markupStatus = getMarkupStatus(subrubro.markup_actual, subrubro.markup_min);
+                    return (
+                      <TableRow
+                        key={`${subrubro.subrubro}-${subrubro.empresa}-${idx}`}
+                        className={subrubro.en_perdida ? 'bg-red-50' : ''}
+                      >
+                        <TableCell className="max-w-[150px] sm:max-w-[200px]">
                           <Link
                             href={`/productos?subrubro_id=${subrubro.subrubro_id}&empresa=${subrubro.empresa}`}
+                            className="block truncate font-medium hover:text-blue-600 hover:underline"
+                            title={subrubro.subrubro}
                           >
-                            Ver productos
+                            {subrubro.subrubro}
                           </Link>
-                        </Button>
-                      </TableCell>
-                    </TableRow>
-                  ))}
+                          <span className="sm:hidden text-xs text-gray-500">{subrubro.empresa}</span>
+                        </TableCell>
+                        <TableCell className="hidden sm:table-cell">
+                          <Badge variant={subrubro.empresa === 'Cromo' ? 'default' : 'secondary'} className="text-xs">
+                            {subrubro.empresa}
+                          </Badge>
+                        </TableCell>
+                        <TableCell className="text-right hidden md:table-cell text-sm">
+                          {subrubro.total_productos}
+                        </TableCell>
+                        <TableCell className="text-right text-sm">
+                          {formatCurrency(subrubro.facturacion)}
+                        </TableCell>
+                        <TableCell className="text-right hidden lg:table-cell text-sm">
+                          {formatCurrency(subrubro.gasto_total)}
+                        </TableCell>
+                        <TableCell className="text-right">
+                          <span className={`text-sm font-medium ${
+                            markupStatus === 'good' ? 'text-green-600' :
+                            markupStatus === 'bad' ? 'text-red-600' : ''
+                          }`}>
+                            {(subrubro.markup_actual || 0).toFixed(0)}%
+                          </span>
+                        </TableCell>
+                        <TableCell className="text-right">
+                          <span className="text-sm text-gray-600">
+                            {(subrubro.markup_min || 0).toFixed(0)}%
+                          </span>
+                        </TableCell>
+                        <TableCell className="text-right">
+                          <div className="flex items-center justify-end gap-1">
+                            {markupStatus === 'bad' && (
+                              <AlertTriangle className="h-3 w-3 text-amber-500 hidden sm:block" />
+                            )}
+                            <span
+                              className={`text-sm font-medium ${subrubro.en_perdida ? 'text-red-600' : 'text-green-600'}`}
+                            >
+                              {formatCurrency(subrubro.resultado)}
+                            </span>
+                          </div>
+                        </TableCell>
+                        <TableCell className="text-center hidden sm:table-cell">
+                          <Button asChild size="sm" variant="ghost" className="h-7 px-2">
+                            <Link href={`/productos?subrubro_id=${subrubro.subrubro_id}&empresa=${subrubro.empresa}`}>
+                              →
+                            </Link>
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
                 </TableBody>
               </Table>
             </div>

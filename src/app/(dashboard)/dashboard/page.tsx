@@ -8,8 +8,17 @@ import { EvolucionChart, DistribucionGastosChart } from '@/components/dashboard/
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
-import { AlertCircle, TrendingDown, TrendingUp, Package, DollarSign } from 'lucide-react';
+import { AlertCircle, TrendingDown, TrendingUp, Package, DollarSign, AlertTriangle } from 'lucide-react';
 import Link from 'next/link';
+
+interface SubrubroItem {
+  subrubro: string;
+  empresa: string;
+  total_productos: number;
+  resultado: number;
+  markup_actual: number;
+  markup_min: number;
+}
 
 interface DashboardData {
   periodo: string;
@@ -34,18 +43,8 @@ interface DashboardData {
     credito: number;
     rentabilidad: number;
   };
-  top_peores: Array<{
-    subrubro: string;
-    empresa: string;
-    total_productos: number;
-    resultado: number;
-  }>;
-  top_mejores: Array<{
-    subrubro: string;
-    empresa: string;
-    total_productos: number;
-    resultado: number;
-  }>;
+  top_peores: SubrubroItem[];
+  top_mejores: SubrubroItem[];
 }
 
 export default function DashboardPage() {
@@ -83,16 +82,13 @@ export default function DashboardPage() {
 
   if (error) {
     return (
-      <div className="p-6">
+      <div className="p-3 sm:p-6">
         <Card className="border-red-200 bg-red-50">
-          <CardContent className="flex items-center gap-4 p-6">
-            <AlertCircle className="h-8 w-8 text-red-500" />
+          <CardContent className="flex items-center gap-4 p-4 sm:p-6">
+            <AlertCircle className="h-6 w-6 sm:h-8 sm:w-8 text-red-500 flex-shrink-0" />
             <div>
               <h3 className="font-semibold text-red-800">Error cargando datos</h3>
-              <p className="text-red-600">{error}</p>
-              <p className="mt-2 text-sm text-red-500">
-                Asegúrese de haber cargado datos de ventas y gastos primero.
-              </p>
+              <p className="text-sm text-red-600">{error}</p>
               <Link href="/upload" className="mt-2 inline-block text-sm font-medium text-red-700 underline">
                 Ir a cargar datos
               </Link>
@@ -108,21 +104,28 @@ export default function DashboardPage() {
   const formatCurrency = (num: number) => {
     if (Math.abs(num) >= 1e9) return `$${(num / 1e9).toFixed(1)}B`;
     if (Math.abs(num) >= 1e6) return `$${(num / 1e6).toFixed(1)}M`;
+    if (Math.abs(num) >= 1e3) return `$${(num / 1e3).toFixed(0)}K`;
     return `$${num.toFixed(0)}`;
   };
 
+  const getMarkupStatus = (actual: number, min: number) => {
+    if (!actual || !min) return 'neutral';
+    if (actual >= min) return 'good';
+    return 'bad';
+  };
+
   return (
-    <div className="p-6">
+    <div className="p-3 sm:p-6">
       {/* Header */}
-      <div className="mb-6 flex items-center justify-between">
+      <div className="mb-4 sm:mb-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Dashboard de Rentabilidad</h1>
-          <p className="text-gray-500">
-            Período: {new Date(data.periodo).toLocaleDateString('es-AR', { year: 'numeric', month: 'long' })}
+          <h1 className="text-xl sm:text-2xl font-bold text-gray-900">Dashboard de Rentabilidad</h1>
+          <p className="text-sm text-gray-500">
+            {new Date(data.periodo).toLocaleDateString('es-AR', { year: 'numeric', month: 'short' })}
           </p>
         </div>
         <Select value={empresa} onValueChange={setEmpresa}>
-          <SelectTrigger className="w-40">
+          <SelectTrigger className="w-32 sm:w-40">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -134,134 +137,177 @@ export default function DashboardPage() {
       </div>
 
       {/* Metrics */}
-      <div className="mb-6 grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+      <div className="mb-4 sm:mb-6 grid grid-cols-2 gap-2 sm:gap-4 lg:grid-cols-4">
         <MetricCard
-          title="Productos en Pérdida"
-          value={`${data.resumen.productos_perdida.toLocaleString()} / ${data.resumen.total_productos.toLocaleString()}`}
-          subtitle={`${data.resumen.pct_perdida.toFixed(1)}% del total`}
+          title="En Pérdida"
+          value={`${data.resumen.productos_perdida.toLocaleString()}`}
+          subtitle={`${data.resumen.pct_perdida.toFixed(0)}% de ${data.resumen.total_productos.toLocaleString()}`}
           type="danger"
-          icon={<Package className="h-6 w-6" />}
+          icon={<Package className="h-5 w-5 sm:h-6 sm:w-6" />}
         />
         <MetricCard
-          title="Pérdida Total"
+          title="Pérdida"
           value={formatCurrency(data.resumen.perdida_total)}
           type="danger"
-          icon={<TrendingDown className="h-6 w-6" />}
+          icon={<TrendingDown className="h-5 w-5 sm:h-6 sm:w-6" />}
         />
         <MetricCard
-          title="Beneficio Total"
+          title="Beneficio"
           value={formatCurrency(data.resumen.beneficio_total)}
           type="success"
-          icon={<TrendingUp className="h-6 w-6" />}
+          icon={<TrendingUp className="h-5 w-5 sm:h-6 sm:w-6" />}
         />
         <MetricCard
-          title="Resultado Neto"
+          title="Resultado"
           value={formatCurrency(data.resumen.resultado_neto)}
           type={data.resumen.resultado_neto >= 0 ? 'success' : 'danger'}
-          icon={<DollarSign className="h-6 w-6" />}
+          icon={<DollarSign className="h-5 w-5 sm:h-6 sm:w-6" />}
         />
       </div>
 
       {/* Charts */}
-      <div className="mb-6 grid gap-6 lg:grid-cols-2">
+      <div className="mb-4 sm:mb-6 grid gap-4 sm:gap-6 lg:grid-cols-2">
         <Card>
-          <CardHeader>
-            <CardTitle>Evolución Últimos 6 Meses</CardTitle>
+          <CardHeader className="p-3 sm:p-6">
+            <CardTitle className="text-sm sm:text-base">Evolución 6 Meses</CardTitle>
           </CardHeader>
-          <CardContent>
+          <CardContent className="p-3 sm:p-6 pt-0">
             {data.evolucion_6_meses.length > 0 ? (
               <EvolucionChart data={data.evolucion_6_meses} />
             ) : (
-              <p className="py-8 text-center text-gray-500">No hay datos históricos</p>
+              <p className="py-8 text-center text-sm text-gray-500">No hay datos históricos</p>
             )}
           </CardContent>
         </Card>
 
         <Card>
-          <CardHeader>
-            <CardTitle>Distribución de Gastos</CardTitle>
+          <CardHeader className="p-3 sm:p-6">
+            <CardTitle className="text-sm sm:text-base">Distribución de Gastos</CardTitle>
           </CardHeader>
-          <CardContent>
+          <CardContent className="p-3 sm:p-6 pt-0">
             <DistribucionGastosChart data={data.distribucion_gastos} />
           </CardContent>
         </Card>
       </div>
 
       {/* Tables */}
-      <div className="grid gap-6 lg:grid-cols-2">
+      <div className="grid gap-4 sm:gap-6 lg:grid-cols-2">
         {/* Top Peores */}
         <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <TrendingDown className="h-5 w-5 text-red-500" />
+          <CardHeader className="p-3 sm:p-6">
+            <CardTitle className="flex items-center gap-2 text-sm sm:text-base">
+              <TrendingDown className="h-4 w-4 sm:h-5 sm:w-5 text-red-500" />
               Top 10 Peores Subrubros
             </CardTitle>
           </CardHeader>
-          <CardContent>
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Subrubro</TableHead>
-                  <TableHead>Empresa</TableHead>
-                  <TableHead className="text-right">Productos</TableHead>
-                  <TableHead className="text-right">Resultado</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {data.top_peores.map((item, idx) => (
-                  <TableRow key={idx}>
-                    <TableCell className="font-medium">{item.subrubro}</TableCell>
-                    <TableCell>
-                      <Badge variant={item.empresa === 'Cromo' ? 'default' : 'secondary'}>
-                        {item.empresa}
-                      </Badge>
-                    </TableCell>
-                    <TableCell className="text-right">{item.total_productos}</TableCell>
-                    <TableCell className="text-right text-red-600">
-                      {formatCurrency(item.resultado)}
-                    </TableCell>
+          <CardContent className="p-0 sm:p-6 sm:pt-0">
+            <div className="overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="min-w-[120px]">Subrubro</TableHead>
+                    <TableHead className="hidden sm:table-cell">Emp.</TableHead>
+                    <TableHead className="text-right">MU</TableHead>
+                    <TableHead className="text-right">Mín</TableHead>
+                    <TableHead className="text-right">Resultado</TableHead>
                   </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+                </TableHeader>
+                <TableBody>
+                  {data.top_peores.map((item, idx) => {
+                    const status = getMarkupStatus(item.markup_actual, item.markup_min);
+                    return (
+                      <TableRow key={idx}>
+                        <TableCell className="max-w-[120px] sm:max-w-[150px]">
+                          <span className="block truncate text-sm font-medium" title={item.subrubro}>
+                            {item.subrubro}
+                          </span>
+                          <span className="sm:hidden text-xs text-gray-500">{item.empresa}</span>
+                        </TableCell>
+                        <TableCell className="hidden sm:table-cell">
+                          <Badge variant={item.empresa === 'Cromo' ? 'default' : 'secondary'} className="text-xs">
+                            {item.empresa}
+                          </Badge>
+                        </TableCell>
+                        <TableCell className="text-right">
+                          <span className={`text-sm ${status === 'bad' ? 'text-red-600 font-medium' : status === 'good' ? 'text-green-600' : ''}`}>
+                            {item.markup_actual.toFixed(0)}%
+                          </span>
+                        </TableCell>
+                        <TableCell className="text-right text-sm text-gray-600">
+                          {item.markup_min.toFixed(0)}%
+                        </TableCell>
+                        <TableCell className="text-right">
+                          <div className="flex items-center justify-end gap-1">
+                            {status === 'bad' && <AlertTriangle className="h-3 w-3 text-amber-500 hidden sm:block" />}
+                            <span className="text-sm font-medium text-red-600">
+                              {formatCurrency(item.resultado)}
+                            </span>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
+            </div>
           </CardContent>
         </Card>
 
         {/* Top Mejores */}
         <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <TrendingUp className="h-5 w-5 text-green-500" />
+          <CardHeader className="p-3 sm:p-6">
+            <CardTitle className="flex items-center gap-2 text-sm sm:text-base">
+              <TrendingUp className="h-4 w-4 sm:h-5 sm:w-5 text-green-500" />
               Top 10 Mejores Subrubros
             </CardTitle>
           </CardHeader>
-          <CardContent>
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Subrubro</TableHead>
-                  <TableHead>Empresa</TableHead>
-                  <TableHead className="text-right">Productos</TableHead>
-                  <TableHead className="text-right">Resultado</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {data.top_mejores.map((item, idx) => (
-                  <TableRow key={idx}>
-                    <TableCell className="font-medium">{item.subrubro}</TableCell>
-                    <TableCell>
-                      <Badge variant={item.empresa === 'Cromo' ? 'default' : 'secondary'}>
-                        {item.empresa}
-                      </Badge>
-                    </TableCell>
-                    <TableCell className="text-right">{item.total_productos}</TableCell>
-                    <TableCell className="text-right text-green-600">
-                      {formatCurrency(item.resultado)}
-                    </TableCell>
+          <CardContent className="p-0 sm:p-6 sm:pt-0">
+            <div className="overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="min-w-[120px]">Subrubro</TableHead>
+                    <TableHead className="hidden sm:table-cell">Emp.</TableHead>
+                    <TableHead className="text-right">MU</TableHead>
+                    <TableHead className="text-right">Mín</TableHead>
+                    <TableHead className="text-right">Resultado</TableHead>
                   </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+                </TableHeader>
+                <TableBody>
+                  {data.top_mejores.map((item, idx) => {
+                    const status = getMarkupStatus(item.markup_actual, item.markup_min);
+                    return (
+                      <TableRow key={idx}>
+                        <TableCell className="max-w-[120px] sm:max-w-[150px]">
+                          <span className="block truncate text-sm font-medium" title={item.subrubro}>
+                            {item.subrubro}
+                          </span>
+                          <span className="sm:hidden text-xs text-gray-500">{item.empresa}</span>
+                        </TableCell>
+                        <TableCell className="hidden sm:table-cell">
+                          <Badge variant={item.empresa === 'Cromo' ? 'default' : 'secondary'} className="text-xs">
+                            {item.empresa}
+                          </Badge>
+                        </TableCell>
+                        <TableCell className="text-right">
+                          <span className={`text-sm ${status === 'good' ? 'text-green-600 font-medium' : ''}`}>
+                            {item.markup_actual.toFixed(0)}%
+                          </span>
+                        </TableCell>
+                        <TableCell className="text-right text-sm text-gray-600">
+                          {item.markup_min.toFixed(0)}%
+                        </TableCell>
+                        <TableCell className="text-right">
+                          <span className="text-sm font-medium text-green-600">
+                            {formatCurrency(item.resultado)}
+                          </span>
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
+            </div>
           </CardContent>
         </Card>
       </div>
@@ -271,26 +317,26 @@ export default function DashboardPage() {
 
 function DashboardSkeleton() {
   return (
-    <div className="p-6">
-      <div className="mb-6">
-        <Skeleton className="h-8 w-64" />
-        <Skeleton className="mt-2 h-4 w-48" />
+    <div className="p-3 sm:p-6">
+      <div className="mb-4 sm:mb-6">
+        <Skeleton className="h-7 w-48 sm:h-8 sm:w-64" />
+        <Skeleton className="mt-2 h-4 w-32 sm:w-48" />
       </div>
 
-      <div className="mb-6 grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+      <div className="mb-4 sm:mb-6 grid grid-cols-2 gap-2 sm:gap-4 lg:grid-cols-4">
         {[1, 2, 3, 4].map((i) => (
-          <Skeleton key={i} className="h-32" />
+          <Skeleton key={i} className="h-24 sm:h-32" />
         ))}
       </div>
 
-      <div className="mb-6 grid gap-6 lg:grid-cols-2">
-        <Skeleton className="h-80" />
-        <Skeleton className="h-80" />
+      <div className="mb-4 sm:mb-6 grid gap-4 sm:gap-6 lg:grid-cols-2">
+        <Skeleton className="h-64 sm:h-80" />
+        <Skeleton className="h-64 sm:h-80" />
       </div>
 
-      <div className="grid gap-6 lg:grid-cols-2">
-        <Skeleton className="h-96" />
-        <Skeleton className="h-96" />
+      <div className="grid gap-4 sm:gap-6 lg:grid-cols-2">
+        <Skeleton className="h-80 sm:h-96" />
+        <Skeleton className="h-80 sm:h-96" />
       </div>
     </div>
   );
