@@ -116,49 +116,42 @@ export async function GET(request: NextRequest) {
 
     // Formatear respuesta
     const formattedData = (data || []).map((item) => {
-      const prod = item.producto as unknown as {
-        id: number;
-        codigo: string;
-        nombre: string;
-        empresa: string;
-        subrubro: { id: number; nombre: string } | null;
-        proveedor: { id: number; codigo: string; nombre: string } | null;
-        comprador: { id: number; codigo: string; nombre: string } | null;
-        categoria: { id: number; codigo: string; nombre: string } | null;
-      };
+      // Handle producto - might be object or array
+      const prodRaw = item.producto;
+      const prod = Array.isArray(prodRaw) ? prodRaw[0] : prodRaw;
 
-      const metricas = item.metricas as unknown as {
-        importe_ventas: number;
-        importe_costo: number;
-        margen_bruto: number;
-        markup_pct: number;
-        stock_unidades: number;
-        stock_costo: number;
-        stock_volumen: number;
-      };
+      // Handle metricas - might be object or array
+      const metricasRaw = item.metricas;
+      const metricas = Array.isArray(metricasRaw) ? metricasRaw[0] : metricasRaw;
+
+      // Handle nested relations that might be arrays
+      const subrubro = prod?.subrubro;
+      const subrubroObj = Array.isArray(subrubro) ? subrubro[0] : subrubro;
+      const proveedor = prod?.proveedor;
+      const proveedorObj = Array.isArray(proveedor) ? proveedor[0] : proveedor;
 
       return {
         id: item.id,
         producto_id: item.producto_id,
         periodo: item.periodo,
-        codigo: prod.codigo,
-        nombre: prod.nombre,
-        empresa: prod.empresa,
-        subrubro: prod.subrubro?.nombre || '',
-        subrubro_id: prod.subrubro?.id || null,
-        proveedor: prod.proveedor?.nombre || '',
-        proveedor_id: prod.proveedor?.id || null,
-        importe_ventas: metricas.importe_ventas,
-        importe_costo: metricas.importe_costo,
-        margen_bruto: metricas.margen_bruto,
-        markup_pct: metricas.markup_pct,
-        markup_minimo_pct: item.markup_minimo_pct,
-        stock_unidades: metricas.stock_unidades,
-        stock_costo: metricas.stock_costo,
-        gasto_total: item.gasto_total,
-        resultado: item.resultado,
-        en_perdida: item.en_perdida,
-        cumple_objetivo: item.cumple_objetivo,
+        codigo: prod?.codigo || '',
+        nombre: prod?.nombre || '',
+        empresa: prod?.empresa || '',
+        subrubro: subrubroObj?.nombre || '',
+        subrubro_id: subrubroObj?.id || null,
+        proveedor: proveedorObj?.nombre || '',
+        proveedor_id: proveedorObj?.id || null,
+        importe_ventas: metricas?.importe_ventas || 0,
+        importe_costo: metricas?.importe_costo || 0,
+        margen_bruto: metricas?.margen_bruto || 0,
+        markup_pct: metricas?.markup_pct || 0,
+        markup_minimo_pct: item.markup_minimo_pct || 0,
+        stock_unidades: metricas?.stock_unidades || 0,
+        stock_costo: metricas?.stock_costo || 0,
+        gasto_total: item.gasto_total || 0,
+        resultado: item.resultado || 0,
+        en_perdida: item.en_perdida || false,
+        cumple_objetivo: item.cumple_objetivo || false,
       };
     });
 
