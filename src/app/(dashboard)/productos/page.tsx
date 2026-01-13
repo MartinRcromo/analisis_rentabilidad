@@ -53,22 +53,33 @@ function ProductosContent() {
   const searchParams = useSearchParams();
   const [data, setData] = useState<PaginatedResponse | null>(null);
   const [loading, setLoading] = useState(true);
-
-  // Get initial filters from URL params
-  const initialSubrubroId = searchParams.get('subrubro_id');
-  const initialProveedorId = searchParams.get('proveedor_id');
-  const initialEmpresa = searchParams.get('empresa') || 'todas';
+  const [initialized, setInitialized] = useState(false);
 
   const [filters, setFilters] = useState({
-    empresa: initialEmpresa,
+    empresa: 'todas',
     estado: 'todos',
     busqueda: '',
     page: 1,
     orderBy: 'resultado',
     orderDir: 'asc',
-    subrubro_id: initialSubrubroId,
-    proveedor_id: initialProveedorId,
+    subrubro_id: null as string | null,
+    proveedor_id: null as string | null,
   });
+
+  // Initialize filters from URL params after mount
+  useEffect(() => {
+    const subrubroId = searchParams.get('subrubro_id');
+    const proveedorId = searchParams.get('proveedor_id');
+    const empresa = searchParams.get('empresa');
+
+    setFilters(prev => ({
+      ...prev,
+      subrubro_id: subrubroId,
+      proveedor_id: proveedorId,
+      empresa: empresa || 'todas',
+    }));
+    setInitialized(true);
+  }, [searchParams]);
 
   const fetchProductos = useCallback(async () => {
     setLoading(true);
@@ -95,8 +106,10 @@ function ProductosContent() {
   }, [filters]);
 
   useEffect(() => {
-    fetchProductos();
-  }, [fetchProductos]);
+    if (initialized) {
+      fetchProductos();
+    }
+  }, [fetchProductos, initialized]);
 
   const handleSort = (column: string) => {
     setFilters((prev) => ({
