@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { Suspense, useEffect, useState, useCallback } from 'react';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -49,7 +49,7 @@ interface PaginatedResponse {
   periodo: string;
 }
 
-export default function ProductosPage() {
+function ProductosContent() {
   const searchParams = useSearchParams();
   const [data, setData] = useState<PaginatedResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -388,5 +388,38 @@ export default function ProductosPage() {
         </CardContent>
       </Card>
     </div>
+  );
+}
+
+function ProductosLoading() {
+  return (
+    <div className="p-3 sm:p-6">
+      <div className="mb-4 sm:mb-6">
+        <Skeleton className="h-8 w-48 mb-2" />
+        <Skeleton className="h-4 w-32" />
+      </div>
+      <Card className="mb-4">
+        <CardContent className="p-4">
+          <Skeleton className="h-10 w-full" />
+        </CardContent>
+      </Card>
+      <Card>
+        <CardContent className="p-4">
+          <div className="space-y-2">
+            {[...Array(10)].map((_, i) => (
+              <Skeleton key={i} className="h-12" />
+            ))}
+          </div>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+export default function ProductosPage() {
+  return (
+    <Suspense fallback={<ProductosLoading />}>
+      <ProductosContent />
+    </Suspense>
   );
 }
