@@ -35,6 +35,12 @@ const REQUIRED_COLUMNS = [
   'stock_volumen',
 ];
 
+// Columnas opcionales (para modelo de 5 grupos de gastos)
+const OPTIONAL_COLUMNS = [
+  'unidades_vendidas',
+  'veces_pedido',
+];
+
 export async function parseVentasExcel(buffer: ArrayBuffer): Promise<ParseVentasResult> {
   const errors: string[] = [];
   const data: VentaExcelRow[] = [];
@@ -122,6 +128,9 @@ export async function parseVentasExcel(buffer: ArrayBuffer): Promise<ParseVentas
         const stock_costo = parseNumber(normalizedRow['stock_costo']);
         const importe_Ventas = parseNumber(normalizedRow['importe_ventas']);
         const stock_volumen = parseNumber(normalizedRow['stock_volumen']);
+        // Nuevos campos opcionales para modelo de 5 grupos
+        const unidades_vendidas = parseNumber(normalizedRow['unidades_vendidas']);
+        const veces_pedido = parseNumber(normalizedRow['veces_pedido']);
 
         // Validaciones básicas
         const rowErrors: string[] = [];
@@ -160,6 +169,8 @@ export async function parseVentasExcel(buffer: ArrayBuffer): Promise<ParseVentas
           stock_costo,
           importe_Ventas,
           stock_volumen,
+          unidades_vendidas,
+          veces_pedido,
         };
 
         data.push(ventaRow);

@@ -61,6 +61,9 @@ export interface MetricasProducto {
   stock_unidades: number;
   stock_costo: number;
   stock_volumen: number;
+  // Nuevos campos para modelo de 5 grupos
+  unidades_vendidas: number;
+  veces_pedido: number;
   created_at: string;
 }
 
@@ -68,20 +71,23 @@ export interface GastosMensuales {
   id: number;
   periodo: string;
   cat1_facturacion_base: number;
-  cat2_volumen_base: number;
+  cat2_volumen_base: number; // Ahora = Ocupación (m³)
   cat3_credito_base: number;
   cat4_rentabilidad_base: number;
+  cat5_movimiento_base: number; // Nuevo: Movimiento (veces_pedido)
   total_clasificado: number;
   total_sin_clasificar: number;
   total_general: number;
   peso_facturacion: number;
-  peso_volumen: number;
+  peso_volumen: number; // Ahora = Ocupación
   peso_credito: number;
   peso_rentabilidad: number;
+  peso_movimiento: number; // Nuevo
   cat1_facturacion_final: number;
-  cat2_volumen_final: number;
+  cat2_volumen_final: number; // Ahora = Ocupación
   cat3_credito_final: number;
   cat4_rentabilidad_final: number;
+  cat5_movimiento_final: number; // Nuevo
   created_at: string;
 }
 
@@ -115,13 +121,15 @@ export interface AnalisisProducto {
   producto_id: number;
   periodo: string;
   porcentaje_facturacion: number;
-  porcentaje_volumen: number;
+  porcentaje_volumen: number; // Ahora = Ocupación (m³)
   porcentaje_credito: number;
   porcentaje_markup: number;
+  porcentaje_movimiento: number; // Nuevo (veces_pedido)
   gasto_facturacion: number;
-  gasto_volumen: number;
+  gasto_volumen: number; // Ahora = Ocupación
   gasto_credito: number;
   gasto_markup: number;
+  gasto_movimiento: number; // Nuevo
   gasto_total: number;
   resultado: number;
   en_perdida: boolean;
@@ -208,6 +216,9 @@ export interface VentaExcelRow {
   stock_costo: number;
   importe_Ventas: number;
   stock_volumen: number;
+  // Nuevos campos para modelo de 5 grupos
+  unidades_vendidas: number;
+  veces_pedido: number;
 }
 
 export interface GastoExcelRow {
@@ -244,7 +255,8 @@ export interface DashboardData {
   }>;
   distribucion_gastos: {
     facturacion: number;
-    volumen: number;
+    ocupacion: number; // Antes: volumen
+    movimiento: number; // Nuevo
     credito: number;
     rentabilidad: number;
   };
@@ -300,11 +312,13 @@ export interface PaginatedResponse<T> {
 
 export interface TotalesPeriodo {
   total_facturacion: number;
-  total_volumen_m3: number;
+  total_volumen_m3: number; // Para ocupación
   total_stock_valorizado: number;
   total_margen_bruto: number;
+  total_veces_pedido: number; // Nuevo: para movimiento
   gastos_facturacion: number;
-  gastos_volumen: number;
+  gastos_ocupacion: number; // Antes: gastos_volumen
+  gastos_movimiento: number; // Nuevo
   gastos_credito: number;
   gastos_rentabilidad: number;
 }

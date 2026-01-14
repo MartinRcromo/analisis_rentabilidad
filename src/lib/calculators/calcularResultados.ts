@@ -12,16 +12,21 @@ interface ProductoCalculado {
   stock_unidades: number;
   stock_costo: number;
   stock_volumen: number;
+  // Nuevos campos para modelo de 5 grupos
+  unidades_vendidas: number;
+  veces_pedido: number;
 
-  // Porcentajes de asignación
+  // Porcentajes de asignación (5 grupos)
   porcentaje_facturacion: number;
-  porcentaje_volumen: number;
+  porcentaje_ocupacion: number; // Antes: porcentaje_volumen
+  porcentaje_movimiento: number; // Nuevo: por veces_pedido
   porcentaje_credito: number;
   porcentaje_markup: number;
 
-  // Gastos asignados
+  // Gastos asignados (5 grupos)
   gasto_facturacion: number;
-  gasto_volumen: number;
+  gasto_ocupacion: number; // Antes: gasto_volumen
+  gasto_movimiento: number; // Nuevo
   gasto_credito: number;
   gasto_markup: number;
   gasto_total: number;
@@ -35,7 +40,8 @@ interface ProductoCalculado {
 
 interface GastosFinales {
   facturacion: number;
-  volumen: number;
+  ocupacion: number; // Antes: volumen (alquiler, servicios, mantenimiento, seguros)
+  movimiento: number; // Nuevo (sueldos logística, fletes)
   credito: number;
   rentabilidad: number;
 }
@@ -49,11 +55,13 @@ export function calcularTotalesPeriodo(
   let totalVolumenM3 = 0;
   let totalStockValorizado = 0;
   let totalMargenBruto = 0;
+  let totalVecesPedido = 0;
 
   for (const venta of ventas) {
     totalFacturacion += venta.importe_Ventas || 0;
     totalVolumenM3 += venta.stock_volumen || 0;
     totalStockValorizado += venta.stock_costo || 0;
+    totalVecesPedido += venta.veces_pedido || 0;
 
     const margen = (venta.importe_Ventas || 0) - (venta.importe_costo || 0);
     totalMargenBruto += margen;
@@ -64,8 +72,10 @@ export function calcularTotalesPeriodo(
     total_volumen_m3: totalVolumenM3,
     total_stock_valorizado: totalStockValorizado,
     total_margen_bruto: totalMargenBruto,
+    total_veces_pedido: totalVecesPedido,
     gastos_facturacion: gastosFinales.facturacion,
-    gastos_volumen: gastosFinales.volumen,
+    gastos_ocupacion: gastosFinales.ocupacion,
+    gastos_movimiento: gastosFinales.movimiento,
     gastos_credito: gastosFinales.credito,
     gastos_rentabilidad: gastosFinales.rentabilidad,
   };
@@ -86,13 +96,18 @@ export function calcularResultadoProducto(
   const stock_unidades = venta.stock_unidades || 0;
   const stock_costo = venta.stock_costo || 0;
   const stock_volumen = venta.stock_volumen || 0;
+  const unidades_vendidas = venta.unidades_vendidas || 0;
+  const veces_pedido = venta.veces_pedido || 0;
 
-  // 2. Calcular porcentajes de asignación
+  // 2. Calcular porcentajes de asignación (5 grupos)
   const porcentaje_facturacion =
     totales.total_facturacion > 0 ? importe_ventas / totales.total_facturacion : 0;
 
-  const porcentaje_volumen =
+  const porcentaje_ocupacion =
     totales.total_volumen_m3 > 0 ? stock_volumen / totales.total_volumen_m3 : 0;
+
+  const porcentaje_movimiento =
+    totales.total_veces_pedido > 0 ? veces_pedido / totales.total_veces_pedido : 0;
 
   const porcentaje_credito =
     totales.total_stock_valorizado > 0 ? stock_costo / totales.total_stock_valorizado : 0;
@@ -100,12 +115,13 @@ export function calcularResultadoProducto(
   const porcentaje_markup =
     totales.total_margen_bruto > 0 ? margen_bruto / totales.total_margen_bruto : 0;
 
-  // 3. Asignar gastos al producto
+  // 3. Asignar gastos al producto (5 grupos)
   const gasto_facturacion = porcentaje_facturacion * totales.gastos_facturacion;
-  const gasto_volumen = porcentaje_volumen * totales.gastos_volumen;
+  const gasto_ocupacion = porcentaje_ocupacion * totales.gastos_ocupacion;
+  const gasto_movimiento = porcentaje_movimiento * totales.gastos_movimiento;
   const gasto_credito = porcentaje_credito * totales.gastos_credito;
   const gasto_markup = porcentaje_markup * totales.gastos_rentabilidad;
-  const gasto_total = gasto_facturacion + gasto_volumen + gasto_credito + gasto_markup;
+  const gasto_total = gasto_facturacion + gasto_ocupacion + gasto_movimiento + gasto_credito + gasto_markup;
 
   // 4. Resultado final
   const resultado = margen_bruto - gasto_total;
@@ -125,12 +141,16 @@ export function calcularResultadoProducto(
     stock_unidades,
     stock_costo,
     stock_volumen,
+    unidades_vendidas,
+    veces_pedido,
     porcentaje_facturacion,
-    porcentaje_volumen,
+    porcentaje_ocupacion,
+    porcentaje_movimiento,
     porcentaje_credito,
     porcentaje_markup,
     gasto_facturacion,
-    gasto_volumen,
+    gasto_ocupacion,
+    gasto_movimiento,
     gasto_credito,
     gasto_markup,
     gasto_total,
@@ -189,27 +209,30 @@ export function simularCambiosProducto(
   // 3. Recalcular porcentajes (asumiendo que totales no cambian mucho)
   const nueva_pct_facturacion =
     totales.total_facturacion > 0 ? nuevas_ventas / totales.total_facturacion : 0;
-  const nueva_pct_volumen =
+  const nueva_pct_ocupacion =
     totales.total_volumen_m3 > 0 ? nuevo_stock_volumen / totales.total_volumen_m3 : 0;
   const nueva_pct_credito =
     totales.total_stock_valorizado > 0 ? nuevo_stock_costo / totales.total_stock_valorizado : 0;
   const nueva_pct_markup =
     totales.total_margen_bruto > 0 ? nuevo_margen / totales.total_margen_bruto : 0;
+  // Movimiento se mantiene igual (misma cantidad de picks)
+  const nueva_pct_movimiento = productoActual.porcentaje_movimiento;
 
-  // 4. Recalcular gastos
+  // 4. Recalcular gastos (5 grupos)
   const nuevo_gasto_facturacion = nueva_pct_facturacion * totales.gastos_facturacion;
-  const nuevo_gasto_volumen = nueva_pct_volumen * totales.gastos_volumen;
+  const nuevo_gasto_ocupacion = nueva_pct_ocupacion * totales.gastos_ocupacion;
+  const nuevo_gasto_movimiento = nueva_pct_movimiento * totales.gastos_movimiento;
   const nuevo_gasto_credito = nueva_pct_credito * totales.gastos_credito;
   const nuevo_gasto_markup = nueva_pct_markup * totales.gastos_rentabilidad;
   const nuevo_gasto_total =
-    nuevo_gasto_facturacion + nuevo_gasto_volumen + nuevo_gasto_credito + nuevo_gasto_markup;
+    nuevo_gasto_facturacion + nuevo_gasto_ocupacion + nuevo_gasto_movimiento + nuevo_gasto_credito + nuevo_gasto_markup;
 
   // 5. Nuevo resultado
   const nuevo_resultado = nuevo_margen - nuevo_gasto_total;
 
   // 6. Ahorros
   const ahorro_credito = productoActual.gasto_credito - nuevo_gasto_credito;
-  const ahorro_volumen = productoActual.gasto_volumen - nuevo_gasto_volumen;
+  const ahorro_volumen = productoActual.gasto_ocupacion - nuevo_gasto_ocupacion;
   const mejora_resultado = nuevo_resultado - productoActual.resultado;
 
   return {
