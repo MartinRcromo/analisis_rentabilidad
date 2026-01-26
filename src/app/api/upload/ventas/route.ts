@@ -200,6 +200,9 @@ export async function POST(request: NextRequest) {
           stock_unidades: v.stock_unidades || 0,
           stock_costo: v.stock_costo || 0,
           stock_volumen: v.stock_volumen || 0,
+          // Nuevos campos para modelo de 5 grupos
+          unidades_vendidas: v.unidades_vendidas || 0,
+          veces_pedido: v.veces_pedido || 0,
         };
       })
       .filter(Boolean);

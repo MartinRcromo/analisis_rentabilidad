@@ -3,7 +3,8 @@ import { GastoExcelRow } from '@/types/database';
 
 interface GastosClasificados {
   facturacion: number;
-  volumen: number;
+  ocupacion: number; // Antes: volumen (alquiler, servicios, mantenimiento, seguros)
+  movimiento: number; // Nuevo (sueldos logística, fletes, embalaje)
   credito: number;
   rentabilidad: number;
   sinClasificar: number;
@@ -76,7 +77,8 @@ export async function parseGastosExcel(
 
   const clasificados: GastosClasificados = {
     facturacion: 0,
-    volumen: 0,
+    ocupacion: 0,
+    movimiento: 0,
     credito: 0,
     rentabilidad: 0,
     sinClasificar: 0,
@@ -194,19 +196,28 @@ export async function parseGastosExcel(
 
         data.push(gastoRow);
 
-        // Clasificar el gasto
+        // Clasificar el gasto (5 grupos)
         switch (clasificacionNormalizada.toLowerCase()) {
           case 'facturacion':
             clasificados.facturacion += importe_gasto;
             break;
-          case 'volumen':
-            clasificados.volumen += importe_gasto;
+          case 'ocupacion':
+            clasificados.ocupacion += importe_gasto;
+            break;
+          case 'movimiento':
+            clasificados.movimiento += importe_gasto;
             break;
           case 'credito':
             clasificados.credito += importe_gasto;
             break;
           case 'rentabilidad':
             clasificados.rentabilidad += importe_gasto;
+            break;
+          // Compatibilidad con clasificación anterior
+          case 'volumen':
+            // Si viene "Volumen" del sistema viejo, distribuir 50/50 entre ocupación y movimiento
+            // O mejor: tratar como ocupación por defecto
+            clasificados.ocupacion += importe_gasto;
             break;
           default:
             clasificados.sinClasificar += importe_gasto;
@@ -275,25 +286,30 @@ function normalizeClasificacion(value: string): string {
   const normalized = value.toLowerCase().trim();
 
   if (normalized.includes('factur')) return 'Facturacion';
-  if (normalized.includes('volumen')) return 'Volumen';
+  if (normalized.includes('ocupacion') || normalized.includes('ocupación')) return 'Ocupacion';
+  if (normalized.includes('movimiento')) return 'Movimiento';
   if (normalized.includes('credit') || normalized.includes('crédito')) return 'Credito';
   if (normalized.includes('rentab')) return 'Rentabilidad';
+  // Compatibilidad: si viene "Volumen" del sistema viejo, tratar como Ocupacion
+  if (normalized.includes('volumen')) return 'Ocupacion';
 
   return 'SinClasificar';
 }
 
-// Función para calcular gastos finales con distribución proporcional
+// Función para calcular gastos finales con distribución proporcional (5 grupos)
 export function calcularGastosFinales(clasificados: GastosClasificados): {
   gastosBase: GastosClasificados;
   gastosFinales: {
     facturacion: number;
-    volumen: number;
+    ocupacion: number;
+    movimiento: number;
     credito: number;
     rentabilidad: number;
   };
   pesos: {
     facturacion: number;
-    volumen: number;
+    ocupacion: number;
+    movimiento: number;
     credito: number;
     rentabilidad: number;
   };
@@ -304,7 +320,8 @@ export function calcularGastosFinales(clasificados: GastosClasificados): {
   // 1. Total clasificado (sin el "sin clasificar")
   const totalClasificado =
     clasificados.facturacion +
-    clasificados.volumen +
+    clasificados.ocupacion +
+    clasificados.movimiento +
     clasificados.credito +
     clasificados.rentabilidad;
 
@@ -313,16 +330,18 @@ export function calcularGastosFinales(clasificados: GastosClasificados): {
 
   // 2. Calcular pesos de cada categoría
   const pesos = {
-    facturacion: totalClasificado > 0 ? clasificados.facturacion / totalClasificado : 0.25,
-    volumen: totalClasificado > 0 ? clasificados.volumen / totalClasificado : 0.25,
-    credito: totalClasificado > 0 ? clasificados.credito / totalClasificado : 0.25,
-    rentabilidad: totalClasificado > 0 ? clasificados.rentabilidad / totalClasificado : 0.25,
+    facturacion: totalClasificado > 0 ? clasificados.facturacion / totalClasificado : 0.20,
+    ocupacion: totalClasificado > 0 ? clasificados.ocupacion / totalClasificado : 0.20,
+    movimiento: totalClasificado > 0 ? clasificados.movimiento / totalClasificado : 0.20,
+    credito: totalClasificado > 0 ? clasificados.credito / totalClasificado : 0.20,
+    rentabilidad: totalClasificado > 0 ? clasificados.rentabilidad / totalClasificado : 0.20,
   };
 
   // 3. Distribuir "sin clasificar" proporcionalmente
   const gastosFinales = {
     facturacion: clasificados.facturacion + pesos.facturacion * totalSinClasificar,
-    volumen: clasificados.volumen + pesos.volumen * totalSinClasificar,
+    ocupacion: clasificados.ocupacion + pesos.ocupacion * totalSinClasificar,
+    movimiento: clasificados.movimiento + pesos.movimiento * totalSinClasificar,
     credito: clasificados.credito + pesos.credito * totalSinClasificar,
     rentabilidad: clasificados.rentabilidad + pesos.rentabilidad * totalSinClasificar,
   };

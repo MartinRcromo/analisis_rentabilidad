@@ -65,26 +65,29 @@ export async function POST(request: NextRequest) {
       dbErrors.push(`Error eliminando detalle de gastos anteriores: ${errDeleteDetalle.message}`);
     }
 
-    // Insertar gastos mensuales
+    // Insertar gastos mensuales (5 grupos)
     const { data: gastoMensual, error: errorGasto } = await supabase
       .from('gastos_mensuales')
       .insert({
         periodo: periodoParam,
         cat1_facturacion_base: gastosCalculados.gastosBase.facturacion,
-        cat2_volumen_base: gastosCalculados.gastosBase.volumen,
+        cat2_volumen_base: gastosCalculados.gastosBase.ocupacion, // Ahora es Ocupación
         cat3_credito_base: gastosCalculados.gastosBase.credito,
         cat4_rentabilidad_base: gastosCalculados.gastosBase.rentabilidad,
+        cat5_movimiento_base: gastosCalculados.gastosBase.movimiento, // Nuevo
         total_clasificado: gastosCalculados.totalClasificado,
         total_sin_clasificar: gastosCalculados.totalSinClasificar,
         total_general: gastosCalculados.totalGeneral,
         peso_facturacion: gastosCalculados.pesos.facturacion,
-        peso_volumen: gastosCalculados.pesos.volumen,
+        peso_volumen: gastosCalculados.pesos.ocupacion, // Ahora es Ocupación
         peso_credito: gastosCalculados.pesos.credito,
         peso_rentabilidad: gastosCalculados.pesos.rentabilidad,
+        peso_movimiento: gastosCalculados.pesos.movimiento, // Nuevo
         cat1_facturacion_final: gastosCalculados.gastosFinales.facturacion,
-        cat2_volumen_final: gastosCalculados.gastosFinales.volumen,
+        cat2_volumen_final: gastosCalculados.gastosFinales.ocupacion, // Ahora es Ocupación
         cat3_credito_final: gastosCalculados.gastosFinales.credito,
         cat4_rentabilidad_final: gastosCalculados.gastosFinales.rentabilidad,
+        cat5_movimiento_final: gastosCalculados.gastosFinales.movimiento, // Nuevo
       })
       .select()
       .single();
@@ -155,20 +158,23 @@ export async function POST(request: NextRequest) {
       distribucion: {
         base: {
           facturacion: gastosCalculados.gastosBase.facturacion,
-          volumen: gastosCalculados.gastosBase.volumen,
+          ocupacion: gastosCalculados.gastosBase.ocupacion,
+          movimiento: gastosCalculados.gastosBase.movimiento,
           credito: gastosCalculados.gastosBase.credito,
           rentabilidad: gastosCalculados.gastosBase.rentabilidad,
           sin_clasificar: gastosCalculados.gastosBase.sinClasificar,
         },
         pesos: {
           facturacion: (gastosCalculados.pesos.facturacion * 100).toFixed(2) + '%',
-          volumen: (gastosCalculados.pesos.volumen * 100).toFixed(2) + '%',
+          ocupacion: (gastosCalculados.pesos.ocupacion * 100).toFixed(2) + '%',
+          movimiento: (gastosCalculados.pesos.movimiento * 100).toFixed(2) + '%',
           credito: (gastosCalculados.pesos.credito * 100).toFixed(2) + '%',
           rentabilidad: (gastosCalculados.pesos.rentabilidad * 100).toFixed(2) + '%',
         },
         final: {
           facturacion: gastosCalculados.gastosFinales.facturacion,
-          volumen: gastosCalculados.gastosFinales.volumen,
+          ocupacion: gastosCalculados.gastosFinales.ocupacion,
+          movimiento: gastosCalculados.gastosFinales.movimiento,
           credito: gastosCalculados.gastosFinales.credito,
           rentabilidad: gastosCalculados.gastosFinales.rentabilidad,
         },
