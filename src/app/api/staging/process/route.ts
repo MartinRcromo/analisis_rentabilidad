@@ -394,18 +394,53 @@ async function procesarGastosStaging(periodo: string, reprocesar: boolean = fals
 
     console.log(`Gastos a resetear: ${countToReset}`);
 
-    const { error: resetError } = await db
-      .from('gastos_staging')
-      .update({ procesado: false })
-      .eq('procesado', true);
+    // Resetear en lotes para evitar problemas con grandes cantidades
+    if (countToReset && countToReset > 0) {
+      // Obtener los IDs de los registros procesados
+      const { data: registrosProcesados } = await db
+        .from('gastos_staging')
+        .select('id')
+        .eq('procesado', true);
 
-    if (resetError) {
-      const errorMsg = `Error reseteando gastos_staging: ${resetError.message}`;
-      console.error(errorMsg);
-      results.errores_detallados.push(errorMsg);
-    } else {
-      console.log(`Registros de gastos_staging reseteados: ${countToReset}`);
+      if (registrosProcesados && registrosProcesados.length > 0) {
+        const ids = registrosProcesados.map(r => r.id);
+        console.log(`Reseteando ${ids.length} registros por ID...`);
+
+        // Resetear en lotes de 500
+        for (let i = 0; i < ids.length; i += 500) {
+          const batchIds = ids.slice(i, i + 500);
+          const { error: resetError } = await db
+            .from('gastos_staging')
+            .update({ procesado: false })
+            .in('id', batchIds);
+
+          if (resetError) {
+            const errorMsg = `Error reseteando gastos_staging batch ${i}: ${resetError.message}`;
+            console.error(errorMsg);
+            results.errores_detallados.push(errorMsg);
+          }
+        }
+      }
+
+      // Verificar que el reset funcionó
+      const { count: countAfterReset } = await db
+        .from('gastos_staging')
+        .select('*', { count: 'exact', head: true })
+        .eq('procesado', true);
+
+      if (countAfterReset && countAfterReset > 0) {
+        const warnMsg = `Advertencia: Después del reset aún hay ${countAfterReset} registros marcados como procesados`;
+        console.warn(warnMsg);
+        results.errores_detallados.push(warnMsg);
+      } else {
+        console.log(`Reset exitoso: ${countToReset} registros de gastos_staging reseteados`);
+      }
     }
+
+    // También eliminar datos previos del período
+    console.log(`Eliminando gastos_detalle y gastos_mensuales del período ${periodo}...`);
+    await db.from('gastos_detalle').delete().eq('periodo', periodo);
+    await db.from('gastos_mensuales').delete().eq('periodo', periodo);
   }
 
   // 2. Obtener TODOS los datos de staging pendientes (con paginación)
