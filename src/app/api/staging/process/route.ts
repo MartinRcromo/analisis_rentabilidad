@@ -67,6 +67,11 @@ async function procesarVentasStaging(periodo: string, reprocesar: boolean = fals
     productos_procesados: 0,
     metricas_insertadas: 0,
     registros_leidos: 0,
+    // Nuevos campos para diagnóstico
+    errores_detallados: [] as string[],
+    paso_actual: '',
+    metricas_fallidas: 0,
+    productos_sin_mapeo: 0,
   };
 
   // 1. Si reprocesar, primero resetear el estado
@@ -98,12 +103,18 @@ async function procesarVentasStaging(periodo: string, reprocesar: boolean = fals
   const categorias = [...new Set(ventasStaging.map(v => String(v.idcategoria || '')).filter(Boolean))];
 
   // 4. Upsert subrubros
+  results.paso_actual = 'Procesando subrubros';
   if (subrubros.length > 0) {
     const { error } = await db
       .from('subrubros')
       .upsert(subrubros.map(nombre => ({ nombre })), { onConflict: 'nombre' });
-    if (error) console.error('Error upsert subrubros:', error);
-    else results.subrubros_procesados = subrubros.length;
+    if (error) {
+      const errorMsg = `Error upsert subrubros: ${error.message} (code: ${error.code})`;
+      console.error(errorMsg);
+      results.errores_detallados.push(errorMsg);
+    } else {
+      results.subrubros_procesados = subrubros.length;
+    }
   }
 
   // 5. Upsert proveedores (eliminar duplicados)
@@ -112,6 +123,7 @@ async function procesarVentasStaging(periodo: string, reprocesar: boolean = fals
     return acc;
   }, [] as Array<{codigo: string; nombre: string}>);
 
+  results.paso_actual = 'Procesando proveedores';
   if (proveedoresUnicos.length > 0) {
     // Insertar en lotes de 500
     for (let i = 0; i < proveedoresUnicos.length; i += 500) {
@@ -119,27 +131,43 @@ async function procesarVentasStaging(periodo: string, reprocesar: boolean = fals
       const { error } = await db
         .from('proveedores')
         .upsert(batch, { onConflict: 'codigo' });
-      if (error) console.error('Error upsert proveedores batch:', error);
+      if (error) {
+        const errorMsg = `Error upsert proveedores batch ${i}: ${error.message} (code: ${error.code})`;
+        console.error(errorMsg);
+        results.errores_detallados.push(errorMsg);
+      }
     }
     results.proveedores_procesados = proveedoresUnicos.length;
   }
 
   // 6. Upsert compradores
+  results.paso_actual = 'Procesando compradores';
   if (compradores.length > 0) {
     const { error } = await db
       .from('compradores')
       .upsert(compradores.map(codigo => ({ codigo })), { onConflict: 'codigo' });
-    if (error) console.error('Error upsert compradores:', error);
-    else results.compradores_procesados = compradores.length;
+    if (error) {
+      const errorMsg = `Error upsert compradores: ${error.message} (code: ${error.code})`;
+      console.error(errorMsg);
+      results.errores_detallados.push(errorMsg);
+    } else {
+      results.compradores_procesados = compradores.length;
+    }
   }
 
   // 7. Upsert categorías
+  results.paso_actual = 'Procesando categorías';
   if (categorias.length > 0) {
     const { error } = await db
       .from('categorias')
       .upsert(categorias.map(codigo => ({ codigo })), { onConflict: 'codigo' });
-    if (error) console.error('Error upsert categorías:', error);
-    else results.categorias_procesadas = categorias.length;
+    if (error) {
+      const errorMsg = `Error upsert categorías: ${error.message} (code: ${error.code})`;
+      console.error(errorMsg);
+      results.errores_detallados.push(errorMsg);
+    } else {
+      results.categorias_procesadas = categorias.length;
+    }
   }
 
   // 8. Obtener IDs de tablas maestras
@@ -174,19 +202,27 @@ async function procesarVentasStaging(periodo: string, reprocesar: boolean = fals
     }
   }
 
+  results.paso_actual = 'Procesando productos';
   if (productosUnicos.length > 0) {
     // Insertar en lotes de 500
+    let productosExitosos = 0;
     for (let i = 0; i < productosUnicos.length; i += 500) {
       const batch = productosUnicos.slice(i, i + 500);
       const { error } = await db
         .from('productos')
         .upsert(batch, { onConflict: 'codigo' });
-      if (error) console.error(`Error upsert productos batch ${i}:`, error);
+      if (error) {
+        const errorMsg = `Error upsert productos batch ${i}-${i+batch.length}: ${error.message} (code: ${error.code})`;
+        console.error(errorMsg);
+        results.errores_detallados.push(errorMsg);
+      } else {
+        productosExitosos += batch.length;
+      }
     }
-    results.productos_procesados = productosUnicos.length;
+    results.productos_procesados = productosExitosos;
   }
 
-  console.log(`Productos únicos procesados: ${productosUnicos.length}`);
+  console.log(`Productos únicos procesados: ${results.productos_procesados}`);
 
   // 10. Obtener IDs de productos
   const productosDb = await fetchAllRecords('productos');
@@ -198,6 +234,16 @@ async function procesarVentasStaging(periodo: string, reprocesar: boolean = fals
   await db.from('metricas_producto').delete().eq('periodo', periodo);
 
   // 12. Insertar métricas (en lotes de 500)
+  results.paso_actual = 'Preparando métricas';
+
+  // Contar productos sin mapeo para diagnóstico
+  const sinMapeo = ventasStaging.filter(v => v.idproducto && !productoMap.has(String(v.idproducto)));
+  results.productos_sin_mapeo = sinMapeo.length;
+  if (sinMapeo.length > 0) {
+    const ejemplos = sinMapeo.slice(0, 5).map(v => String(v.idproducto));
+    results.errores_detallados.push(`${sinMapeo.length} registros sin mapeo de producto. Ejemplos: ${ejemplos.join(', ')}`);
+  }
+
   const metricas = ventasStaging
     .filter(v => v.idproducto && productoMap.has(String(v.idproducto)))
     .map(v => {
@@ -219,28 +265,57 @@ async function procesarVentasStaging(periodo: string, reprocesar: boolean = fals
     });
 
   console.log(`Métricas a insertar: ${metricas.length}`);
+  results.paso_actual = `Insertando ${metricas.length} métricas`;
 
   if (metricas.length > 0) {
     for (let i = 0; i < metricas.length; i += 500) {
       const batch = metricas.slice(i, i + 500);
-      const { error } = await db.from('metricas_producto').insert(batch);
+      const { error, data } = await db.from('metricas_producto').insert(batch).select('id');
       if (error) {
-        console.error(`Error insertando métricas batch ${i}:`, error);
+        const errorMsg = `Error insertando métricas batch ${i}-${i+batch.length}: ${error.message} (code: ${error.code}, details: ${error.details || 'none'}, hint: ${error.hint || 'none'})`;
+        console.error(errorMsg);
+        results.errores_detallados.push(errorMsg);
+        results.metricas_fallidas += batch.length;
+
+        // Intentar identificar el registro problemático
+        if (batch.length <= 10) {
+          for (let j = 0; j < batch.length; j++) {
+            const singleResult = await db.from('metricas_producto').insert(batch[j]).select('id');
+            if (singleResult.error) {
+              results.errores_detallados.push(`  -> Registro ${i+j} falló: producto_id=${batch[j].producto_id}, error=${singleResult.error.message}`);
+            } else {
+              results.metricas_insertadas += 1;
+              results.metricas_fallidas -= 1;
+            }
+          }
+        }
       } else {
-        results.metricas_insertadas += batch.length;
+        results.metricas_insertadas += data?.length || batch.length;
       }
     }
   }
 
   // 13. Marcar como procesados (en lotes)
+  results.paso_actual = 'Marcando como procesados';
   const ids = ventasStaging.map(v => v.id);
+  let marcadosExitosos = 0;
   for (let i = 0; i < ids.length; i += 500) {
     const batchIds = ids.slice(i, i + 500);
-    await db
+    const { error } = await db
       .from('ventas_staging')
       .update({ procesado: true })
       .in('id', batchIds);
+    if (error) {
+      const errorMsg = `Error marcando procesados batch ${i}-${i+batchIds.length}: ${error.message}`;
+      console.error(errorMsg);
+      results.errores_detallados.push(errorMsg);
+    } else {
+      marcadosExitosos += batchIds.length;
+    }
   }
+
+  results.paso_actual = 'Completado';
+  console.log(`Ventas marcadas como procesadas: ${marcadosExitosos}/${ids.length}`);
 
   return results;
 }
@@ -529,8 +604,13 @@ export async function POST(request: NextRequest) {
       .eq('periodo', periodo)
       .single();
 
+    // Combinar todos los errores para diagnóstico
+    const ventasErrores = (results.ventas as Record<string, unknown>)?.errores_detallados as string[] || [];
+    const gastosErrores = (results.gastos as Record<string, unknown>)?.errores_detallados as string[] || [];
+    const todosLosErrores = [...results.errors, ...ventasErrores, ...gastosErrores];
+
     return NextResponse.json({
-      success: results.errors.length === 0,
+      success: results.errors.length === 0 && ventasErrores.length === 0 && gastosErrores.length === 0,
       periodo,
       resultados: {
         ventas: results.ventas,
@@ -540,7 +620,12 @@ export async function POST(request: NextRequest) {
           gastos_mensuales: gastosMensuales ? 'OK' : 'NO ENCONTRADO'
         }
       },
-      errors: results.errors.length > 0 ? results.errors : undefined
+      errors: todosLosErrores.length > 0 ? todosLosErrores : undefined,
+      diagnostico: {
+        ventas_paso: (results.ventas as Record<string, unknown>)?.paso_actual || 'no iniciado',
+        ventas_metricas_fallidas: (results.ventas as Record<string, unknown>)?.metricas_fallidas || 0,
+        ventas_productos_sin_mapeo: (results.ventas as Record<string, unknown>)?.productos_sin_mapeo || 0,
+      }
     });
 
   } catch (error) {

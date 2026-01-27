@@ -32,8 +32,12 @@ interface ProcessResult {
       proveedores_procesados?: number;
       productos_procesados?: number;
       metricas_insertadas?: number;
+      metricas_fallidas?: number;
+      productos_sin_mapeo?: number;
       registros_leidos?: number;
       mensaje?: string;
+      paso_actual?: string;
+      errores_detallados?: string[];
     };
     gastos?: {
       gastos_detalle_insertados?: number;
@@ -52,6 +56,11 @@ interface ProcessResult {
     };
   };
   errors?: string[];
+  diagnostico?: {
+    ventas_paso?: string;
+    ventas_metricas_fallidas?: number;
+    ventas_productos_sin_mapeo?: number;
+  };
 }
 
 interface CalculateResult {
@@ -377,6 +386,70 @@ export default function StagingPage() {
           </Alert>
         )}
 
+        {/* Diagnóstico detallado */}
+        {result && (result.diagnostico || result.errors) && (
+          <Card className="mb-6 border-orange-200 bg-orange-50">
+            <CardHeader>
+              <div className="flex items-center gap-2">
+                <AlertCircle className="h-6 w-6 text-orange-500" />
+                <CardTitle className="text-orange-800">Diagnóstico del Procesamiento</CardTitle>
+              </div>
+            </CardHeader>
+            <CardContent>
+              {result.diagnostico && (
+                <div className="mb-4 grid grid-cols-3 gap-4 text-sm">
+                  <div className="rounded bg-white p-2">
+                    <span className="text-gray-500">Paso actual:</span>
+                    <span className="ml-2 font-medium">{result.diagnostico.ventas_paso || 'N/A'}</span>
+                  </div>
+                  <div className="rounded bg-white p-2">
+                    <span className="text-gray-500">Métricas fallidas:</span>
+                    <span className={`ml-2 font-medium ${(result.diagnostico.ventas_metricas_fallidas || 0) > 0 ? 'text-red-600' : ''}`}>
+                      {result.diagnostico.ventas_metricas_fallidas || 0}
+                    </span>
+                  </div>
+                  <div className="rounded bg-white p-2">
+                    <span className="text-gray-500">Productos sin mapeo:</span>
+                    <span className={`ml-2 font-medium ${(result.diagnostico.ventas_productos_sin_mapeo || 0) > 0 ? 'text-orange-600' : ''}`}>
+                      {result.diagnostico.ventas_productos_sin_mapeo || 0}
+                    </span>
+                  </div>
+                </div>
+              )}
+
+              {result.errors && result.errors.length > 0 && (
+                <div className="rounded bg-white p-3">
+                  <p className="mb-2 font-medium text-red-800">Errores detallados ({result.errors.length}):</p>
+                  <div className="max-h-60 overflow-y-auto">
+                    <ul className="space-y-1 text-xs text-red-700 font-mono">
+                      {result.errors.map((err, idx) => (
+                        <li key={idx} className="border-b border-red-100 pb-1">
+                          {idx + 1}. {err}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                </div>
+              )}
+
+              {result.resultados?.ventas?.errores_detallados && result.resultados.ventas.errores_detallados.length > 0 && (
+                <div className="mt-4 rounded bg-white p-3">
+                  <p className="mb-2 font-medium text-orange-800">Errores de ventas ({result.resultados.ventas.errores_detallados.length}):</p>
+                  <div className="max-h-40 overflow-y-auto">
+                    <ul className="space-y-1 text-xs text-orange-700 font-mono">
+                      {result.resultados.ventas.errores_detallados.map((err, idx) => (
+                        <li key={idx} className="border-b border-orange-100 pb-1">
+                          {err}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        )}
+
         {/* Resultado */}
         {result && result.success && (
           <Card className="border-green-200 bg-green-50">
@@ -421,6 +494,18 @@ export default function StagingPage() {
                           {result.resultados.ventas.metricas_insertadas || 0}
                         </span>
                       </li>
+                      {(result.resultados.ventas.metricas_fallidas || 0) > 0 && (
+                        <li className="flex justify-between text-red-600">
+                          <span>Métricas fallidas:</span>
+                          <span className="font-semibold">{result.resultados.ventas.metricas_fallidas}</span>
+                        </li>
+                      )}
+                      {(result.resultados.ventas.productos_sin_mapeo || 0) > 0 && (
+                        <li className="flex justify-between text-orange-600">
+                          <span>Productos sin mapeo:</span>
+                          <span className="font-semibold">{result.resultados.ventas.productos_sin_mapeo}</span>
+                        </li>
+                      )}
                     </ul>
                   </div>
                 )}
