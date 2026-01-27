@@ -14,6 +14,7 @@ import {
   Settings,
   Menu,
   X,
+  Database,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -25,6 +26,7 @@ const navigation = [
   { name: 'Acciones', href: '/acciones', icon: ClipboardList },
   { name: 'Comparación', href: '/comparacion', icon: GitCompare },
   { name: 'Cargar Datos', href: '/upload', icon: Upload },
+  { name: 'Procesar Staging', href: '/staging', icon: Database },
 ];
 
 export function Sidebar() {
