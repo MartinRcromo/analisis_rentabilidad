@@ -193,11 +193,15 @@ export default function StagingPage() {
     let hayMasPendientes = true;
     let ultimoResultado: ProcessResult | null = null;
     let esReprocesar = reprocesar;
+    let reintentos = 0;
+    const MAX_REINTENTOS = 3;
+    const TIMEOUT_MS = 120000; // 2 minutos de timeout por lote
 
     try {
       // Procesar en lotes hasta que no haya más pendientes
       while (hayMasPendientes) {
         loteActual++;
+        reintentos = 0;
 
         setBatchProgress(prev => prev ? {
           ...prev,
@@ -205,14 +209,44 @@ export default function StagingPage() {
           en_progreso: true,
         } : null);
 
-        const response = await fetch('/api/staging/process', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            periodo: formattedPeriodo,
-            reprocesar: esReprocesar // Solo reprocesar en el primer lote
-          }),
-        });
+        let response: Response | null = null;
+        let fetchError: Error | null = null;
+
+        // Intentar con reintentos en caso de error de red
+        while (reintentos <= MAX_REINTENTOS && !response) {
+          try {
+            // Crear AbortController para timeout
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), TIMEOUT_MS);
+
+            response = await fetch('/api/staging/process', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                periodo: formattedPeriodo,
+                reprocesar: esReprocesar // Solo reprocesar en el primer lote
+              }),
+              signal: controller.signal,
+            });
+
+            clearTimeout(timeoutId);
+          } catch (err) {
+            fetchError = err instanceof Error ? err : new Error(String(err));
+            reintentos++;
+
+            // Si es error de abort (timeout), reintentar con espera exponencial
+            if (reintentos <= MAX_REINTENTOS) {
+              const waitTime = Math.pow(2, reintentos) * 1000; // 2s, 4s, 8s
+              console.log(`Reintento ${reintentos}/${MAX_REINTENTOS} después de ${waitTime}ms...`);
+              await new Promise(resolve => setTimeout(resolve, waitTime));
+            }
+          }
+        }
+
+        // Si después de todos los reintentos no hay response, fallar
+        if (!response) {
+          throw fetchError || new Error('Error de red después de múltiples reintentos');
+        }
 
         // Después del primer lote, ya no reprocesamos
         esReprocesar = false;

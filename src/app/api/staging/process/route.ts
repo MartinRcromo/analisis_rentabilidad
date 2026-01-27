@@ -359,12 +359,24 @@ async function procesarVentasStaging(periodo: string, reprocesar: boolean = fals
   results.lote_completado = results.registros_pendientes === 0;
   console.log(`Ventas marcadas como procesadas: ${marcadosExitosos}/${ids.length}. Pendientes: ${results.registros_pendientes}`);
 
+  // Limitar errores_detallados para no inflar el response
+  if (results.errores_detallados.length > 20) {
+    const total = results.errores_detallados.length;
+    results.errores_detallados = [
+      ...results.errores_detallados.slice(0, 10),
+      `... (${total - 20} errores omitidos) ...`,
+      ...results.errores_detallados.slice(-10)
+    ];
+  }
+
   return results;
 }
 
 // =============================================================================
-// PROCESAR GASTOS STAGING (TypeScript directo)
+// PROCESAR GASTOS STAGING (TypeScript directo) - CON BATCHING
 // =============================================================================
+const GASTOS_BATCH_LIMIT = 2000; // Máximo registros por llamada para evitar timeout
+
 async function procesarGastosStaging(periodo: string, reprocesar: boolean = false) {
   const db = getSupabase();
   const results = {
@@ -380,7 +392,26 @@ async function procesarGastosStaging(periodo: string, reprocesar: boolean = fals
     // Nuevos campos para diagnóstico (igual que ventas)
     errores_detallados: [] as string[],
     paso_actual: '',
+    // Info de lotes (igual que ventas)
+    registros_pendientes: 0,
+    lote_completado: false,
+    gastos_ya_procesados: false, // Flag para indicar que gastos ya fue procesado
   };
+
+  // Verificar si ya existe gastos_mensuales para este período (ya fue procesado)
+  const { data: existingGastos } = await db
+    .from('gastos_mensuales')
+    .select('id')
+    .eq('periodo', periodo)
+    .single();
+
+  // Si ya existe y NO es reprocesar, saltar el procesamiento de gastos
+  if (existingGastos && !reprocesar) {
+    results.gastos_ya_procesados = true;
+    results.paso_actual = 'Gastos ya procesados para este período';
+    console.log('Gastos ya procesados para este período, saltando...');
+    return { ...results, mensaje: 'Gastos ya procesados para este período' };
+  }
 
   // 1. Si reprocesar, primero resetear el estado
   if (reprocesar) {
@@ -396,15 +427,21 @@ async function procesarGastosStaging(periodo: string, reprocesar: boolean = fals
 
     // Resetear en lotes para evitar problemas con grandes cantidades
     if (countToReset && countToReset > 0) {
-      // Obtener los IDs de los registros procesados
-      const { data: registrosProcesados } = await db
-        .from('gastos_staging')
-        .select('id')
-        .eq('procesado', true);
+      // Obtener los IDs de los registros procesados en lotes
+      let offset = 0;
+      const PAGE_SIZE = 1000;
+      let totalReseteados = 0;
 
-      if (registrosProcesados && registrosProcesados.length > 0) {
+      while (offset < countToReset) {
+        const { data: registrosProcesados } = await db
+          .from('gastos_staging')
+          .select('id')
+          .eq('procesado', true)
+          .range(offset, offset + PAGE_SIZE - 1);
+
+        if (!registrosProcesados || registrosProcesados.length === 0) break;
+
         const ids = registrosProcesados.map(r => r.id);
-        console.log(`Reseteando ${ids.length} registros por ID...`);
 
         // Resetear en lotes de 500
         for (let i = 0; i < ids.length; i += 500) {
@@ -415,26 +452,18 @@ async function procesarGastosStaging(periodo: string, reprocesar: boolean = fals
             .in('id', batchIds);
 
           if (resetError) {
-            const errorMsg = `Error reseteando gastos_staging batch ${i}: ${resetError.message}`;
+            const errorMsg = `Error reseteando gastos_staging batch ${offset + i}: ${resetError.message}`;
             console.error(errorMsg);
             results.errores_detallados.push(errorMsg);
+          } else {
+            totalReseteados += batchIds.length;
           }
         }
+
+        offset += PAGE_SIZE;
       }
 
-      // Verificar que el reset funcionó
-      const { count: countAfterReset } = await db
-        .from('gastos_staging')
-        .select('*', { count: 'exact', head: true })
-        .eq('procesado', true);
-
-      if (countAfterReset && countAfterReset > 0) {
-        const warnMsg = `Advertencia: Después del reset aún hay ${countAfterReset} registros marcados como procesados`;
-        console.warn(warnMsg);
-        results.errores_detallados.push(warnMsg);
-      } else {
-        console.log(`Reset exitoso: ${countToReset} registros de gastos_staging reseteados`);
-      }
+      console.log(`Reset completado: ${totalReseteados} registros de gastos_staging reseteados`);
     }
 
     // También eliminar datos previos del período
@@ -443,27 +472,25 @@ async function procesarGastosStaging(periodo: string, reprocesar: boolean = fals
     await db.from('gastos_mensuales').delete().eq('periodo', periodo);
   }
 
-  // 2. Obtener TODOS los datos de staging pendientes (con paginación)
+  // 2. Obtener UN LOTE de datos de staging pendientes (máximo GASTOS_BATCH_LIMIT)
   results.paso_actual = 'Obteniendo registros de gastos_staging...';
-  console.log('Obteniendo registros de gastos_staging...');
-  const gastosStaging = await fetchAllRecords('gastos_staging', { column: 'procesado', value: false });
+  console.log(`Obteniendo hasta ${GASTOS_BATCH_LIMIT} registros de gastos_staging...`);
+  const gastosStaging = await fetchRecordsWithLimit('gastos_staging', GASTOS_BATCH_LIMIT, { column: 'procesado', value: false });
 
-  // Verificación adicional: contar total en la tabla
-  const { count: totalGastos } = await db
-    .from('gastos_staging')
-    .select('*', { count: 'exact', head: true });
-
-  const { count: gastosProcesados } = await db
+  // Contar pendientes totales para informar progreso
+  const { count: totalPendientes } = await db
     .from('gastos_staging')
     .select('*', { count: 'exact', head: true })
-    .eq('procesado', true);
+    .eq('procesado', false);
 
-  console.log(`Estado gastos_staging: Total=${totalGastos}, Procesados=${gastosProcesados}, Pendientes obtenidos=${gastosStaging.length}`);
+  results.registros_pendientes = (totalPendientes || 0) - gastosStaging.length;
 
   if (!gastosStaging || gastosStaging.length === 0) {
-    results.errores_detallados.push(`No hay gastos pendientes. Total en tabla: ${totalGastos}, Ya procesados: ${gastosProcesados}`);
+    results.lote_completado = true;
     return { ...results, mensaje: 'No hay gastos pendientes de procesar' };
   }
+
+  console.log(`Procesando lote de ${gastosStaging.length} gastos. Pendientes después: ${results.registros_pendientes}`);
 
   results.registros_leidos = gastosStaging.length;
   console.log(`Procesando ${gastosStaging.length} registros de gastos_staging`);
@@ -730,9 +757,10 @@ async function procesarGastosStaging(periodo: string, reprocesar: boolean = fals
     }
   }
 
-  console.log(`Gastos marcados como procesados: ${marcadosExitosos}/${ids.length}`);
+  console.log(`Gastos marcados como procesados: ${marcadosExitosos}/${ids.length}. Pendientes: ${results.registros_pendientes}`);
 
   results.paso_actual = 'Completado';
+  results.lote_completado = results.registros_pendientes === 0;
   results.total_facturacion = final_facturacion;
   results.total_ocupacion = final_ocupacion;
   results.total_movimiento = final_movimiento;
@@ -740,6 +768,16 @@ async function procesarGastosStaging(periodo: string, reprocesar: boolean = fals
   results.total_rentabilidad = final_rentabilidad;
   results.total_sin_clasificar = sin_clasificar;
   results.total_general = total_general;
+
+  // Limitar errores_detallados para no inflar el response
+  if (results.errores_detallados.length > 20) {
+    const total = results.errores_detallados.length;
+    results.errores_detallados = [
+      ...results.errores_detallados.slice(0, 10),
+      `... (${total - 20} errores omitidos) ...`,
+      ...results.errores_detallados.slice(-10)
+    ];
+  }
 
   return results;
 }
@@ -807,14 +845,26 @@ export async function POST(request: NextRequest) {
       .eq('periodo', periodo)
       .single();
 
-    // Combinar todos los errores para diagnóstico
+    // Combinar todos los errores para diagnóstico (limitar tamaño)
     const ventasErrores = (results.ventas as Record<string, unknown>)?.errores_detallados as string[] || [];
     const gastosErrores = (results.gastos as Record<string, unknown>)?.errores_detallados as string[] || [];
-    const todosLosErrores = [...results.errors, ...ventasErrores, ...gastosErrores];
+    let todosLosErrores = [...results.errors, ...ventasErrores, ...gastosErrores];
 
-    // Determinar si hay más registros pendientes
+    // Limitar errores combinados para evitar response muy grande
+    if (todosLosErrores.length > 30) {
+      const total = todosLosErrores.length;
+      todosLosErrores = [
+        ...todosLosErrores.slice(0, 15),
+        `... (${total - 30} errores omitidos) ...`,
+        ...todosLosErrores.slice(-15)
+      ];
+    }
+
+    // Determinar si hay más registros pendientes (ventas O gastos)
     const ventasPendientes = (results.ventas as Record<string, unknown>)?.registros_pendientes as number || 0;
-    const hayMasPendientes = ventasPendientes > 0;
+    const gastosPendientes = (results.gastos as Record<string, unknown>)?.registros_pendientes as number || 0;
+    const gastosYaProcesados = (results.gastos as Record<string, unknown>)?.gastos_ya_procesados as boolean || false;
+    const hayMasPendientes = ventasPendientes > 0 || (gastosPendientes > 0 && !gastosYaProcesados);
 
     return NextResponse.json({
       success: results.errors.length === 0 && ventasErrores.length === 0 && gastosErrores.length === 0,
