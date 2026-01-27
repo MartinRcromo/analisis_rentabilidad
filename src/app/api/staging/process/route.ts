@@ -7,9 +7,44 @@ const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PU
 const supabase = createClient(supabaseUrl, supabaseKey);
 
 // =============================================================================
+// HELPER: Obtener todos los registros con paginación
+// =============================================================================
+async function fetchAllRecords(table: string, filter?: { column: string; value: boolean }) {
+  const PAGE_SIZE = 1000;
+  let allRecords: Record<string, unknown>[] = [];
+  let offset = 0;
+  let hasMore = true;
+
+  while (hasMore) {
+    let query = supabase
+      .from(table)
+      .select('*')
+      .range(offset, offset + PAGE_SIZE - 1);
+
+    if (filter) {
+      query = query.eq(filter.column, filter.value);
+    }
+
+    const { data, error } = await query;
+
+    if (error) throw new Error(`Error leyendo ${table}: ${error.message}`);
+
+    if (data && data.length > 0) {
+      allRecords = [...allRecords, ...data];
+      offset += PAGE_SIZE;
+      hasMore = data.length === PAGE_SIZE;
+    } else {
+      hasMore = false;
+    }
+  }
+
+  return allRecords;
+}
+
+// =============================================================================
 // PROCESAR VENTAS STAGING (TypeScript directo)
 // =============================================================================
-async function procesarVentasStaging(periodo: string) {
+async function procesarVentasStaging(periodo: string, reprocesar: boolean = false) {
   const results = {
     subrubros_procesados: 0,
     proveedores_procesados: 0,
@@ -17,28 +52,36 @@ async function procesarVentasStaging(periodo: string) {
     categorias_procesadas: 0,
     productos_procesados: 0,
     metricas_insertadas: 0,
+    registros_leidos: 0,
   };
 
-  // 1. Obtener datos de staging pendientes
-  const { data: ventasStaging, error: errorStaging } = await supabase
-    .from('ventas_staging')
-    .select('*')
-    .eq('procesado', false);
+  // 1. Si reprocesar, primero resetear el estado
+  if (reprocesar) {
+    await supabase
+      .from('ventas_staging')
+      .update({ procesado: false })
+      .eq('procesado', true);
+    console.log('Registros de ventas_staging reseteados');
+  }
 
-  if (errorStaging) throw new Error(`Error leyendo ventas_staging: ${errorStaging.message}`);
+  // 2. Obtener TODOS los datos de staging pendientes (con paginación)
+  console.log('Obteniendo registros de ventas_staging...');
+  const ventasStaging = await fetchAllRecords('ventas_staging', { column: 'procesado', value: false });
+
   if (!ventasStaging || ventasStaging.length === 0) {
     return { ...results, mensaje: 'No hay ventas pendientes de procesar' };
   }
 
+  results.registros_leidos = ventasStaging.length;
   console.log(`Procesando ${ventasStaging.length} registros de ventas_staging`);
 
-  // 2. Extraer valores únicos
+  // 3. Extraer valores únicos
   const subrubros = [...new Set(ventasStaging.map(v => v.subrubro).filter(Boolean))];
-  const proveedores = [...new Set(ventasStaging.filter(v => v.idproveedor).map(v => ({ codigo: v.idproveedor, nombre: v.proveedor })))];
+  const proveedores = ventasStaging.filter(v => v.idproveedor).map(v => ({ codigo: v.idproveedor, nombre: v.proveedor }));
   const compradores = [...new Set(ventasStaging.map(v => v.idcomprador).filter(Boolean))];
   const categorias = [...new Set(ventasStaging.map(v => v.idcategoria).filter(Boolean))];
 
-  // 3. Upsert subrubros
+  // 4. Upsert subrubros
   if (subrubros.length > 0) {
     const { error } = await supabase
       .from('subrubros')
@@ -47,21 +90,25 @@ async function procesarVentasStaging(periodo: string) {
     else results.subrubros_procesados = subrubros.length;
   }
 
-  // 4. Upsert proveedores
+  // 5. Upsert proveedores (eliminar duplicados)
   const proveedoresUnicos = proveedores.reduce((acc, p) => {
     if (!acc.find((x: { codigo: string; nombre: string }) => x.codigo === p.codigo)) acc.push(p);
     return acc;
   }, [] as typeof proveedores);
 
   if (proveedoresUnicos.length > 0) {
-    const { error } = await supabase
-      .from('proveedores')
-      .upsert(proveedoresUnicos, { onConflict: 'codigo' });
-    if (error) console.error('Error upsert proveedores:', error);
-    else results.proveedores_procesados = proveedoresUnicos.length;
+    // Insertar en lotes de 500
+    for (let i = 0; i < proveedoresUnicos.length; i += 500) {
+      const batch = proveedoresUnicos.slice(i, i + 500);
+      const { error } = await supabase
+        .from('proveedores')
+        .upsert(batch, { onConflict: 'codigo' });
+      if (error) console.error('Error upsert proveedores batch:', error);
+    }
+    results.proveedores_procesados = proveedoresUnicos.length;
   }
 
-  // 5. Upsert compradores
+  // 6. Upsert compradores
   if (compradores.length > 0) {
     const { error } = await supabase
       .from('compradores')
@@ -70,7 +117,7 @@ async function procesarVentasStaging(periodo: string) {
     else results.compradores_procesados = compradores.length;
   }
 
-  // 6. Upsert categorías
+  // 7. Upsert categorías
   if (categorias.length > 0) {
     const { error } = await supabase
       .from('categorias')
@@ -79,7 +126,7 @@ async function procesarVentasStaging(periodo: string) {
     else results.categorias_procesadas = categorias.length;
   }
 
-  // 7. Obtener IDs de tablas maestras
+  // 8. Obtener IDs de tablas maestras
   const { data: subrubrosDb } = await supabase.from('subrubros').select('id, nombre');
   const { data: proveedoresDb } = await supabase.from('proveedores').select('id, codigo');
   const { data: compradoresDb } = await supabase.from('compradores').select('id, codigo');
@@ -90,7 +137,7 @@ async function procesarVentasStaging(periodo: string) {
   const compradorMap = new Map(compradoresDb?.map(c => [c.codigo, c.id]) || []);
   const categoriaMap = new Map(categoriasDb?.map(c => [c.codigo, c.id]) || []);
 
-  // 8. Upsert productos
+  // 9. Upsert productos (eliminar duplicados)
   type ProductoUnico = {codigo: string; nombre: string; empresa: string; subrubro_id: number | null; proveedor_id: number | null; comprador_id: number | null; categoria_id: number | null};
   const productosUnicos = ventasStaging.reduce((acc, v) => {
     if (v.idproducto && !acc.find((x: ProductoUnico) => x.codigo === v.idproducto)) {
@@ -108,21 +155,29 @@ async function procesarVentasStaging(periodo: string) {
   }, [] as ProductoUnico[]);
 
   if (productosUnicos.length > 0) {
-    const { error } = await supabase
-      .from('productos')
-      .upsert(productosUnicos, { onConflict: 'codigo' });
-    if (error) console.error('Error upsert productos:', error);
-    else results.productos_procesados = productosUnicos.length;
+    // Insertar en lotes de 500
+    for (let i = 0; i < productosUnicos.length; i += 500) {
+      const batch = productosUnicos.slice(i, i + 500);
+      const { error } = await supabase
+        .from('productos')
+        .upsert(batch, { onConflict: 'codigo' });
+      if (error) console.error(`Error upsert productos batch ${i}:`, error);
+    }
+    results.productos_procesados = productosUnicos.length;
   }
 
-  // 9. Obtener IDs de productos
-  const { data: productosDb } = await supabase.from('productos').select('id, codigo');
+  console.log(`Productos únicos procesados: ${productosUnicos.length}`);
+
+  // 10. Obtener IDs de productos
+  const productosDb = await fetchAllRecords('productos');
   const productoMap = new Map(productosDb?.map(p => [p.codigo, p.id]) || []);
 
-  // 10. Eliminar métricas anteriores del período
+  console.log(`Productos en BD: ${productoMap.size}`);
+
+  // 11. Eliminar métricas anteriores del período
   await supabase.from('metricas_producto').delete().eq('periodo', periodo);
 
-  // 11. Insertar métricas
+  // 12. Insertar métricas (en lotes de 500)
   const metricas = ventasStaging
     .filter(v => v.idproducto && productoMap.has(v.idproducto))
     .map(v => ({
@@ -139,21 +194,29 @@ async function procesarVentasStaging(periodo: string) {
       veces_pedido: v.veces_pedido || 1,
     }));
 
+  console.log(`Métricas a insertar: ${metricas.length}`);
+
   if (metricas.length > 0) {
-    // Insertar en lotes de 500
     for (let i = 0; i < metricas.length; i += 500) {
       const batch = metricas.slice(i, i + 500);
       const { error } = await supabase.from('metricas_producto').insert(batch);
-      if (error) console.error(`Error insertando métricas batch ${i}:`, error);
-      else results.metricas_insertadas += batch.length;
+      if (error) {
+        console.error(`Error insertando métricas batch ${i}:`, error);
+      } else {
+        results.metricas_insertadas += batch.length;
+      }
     }
   }
 
-  // 12. Marcar como procesados
-  await supabase
-    .from('ventas_staging')
-    .update({ procesado: true })
-    .eq('procesado', false);
+  // 13. Marcar como procesados (en lotes)
+  const ids = ventasStaging.map(v => v.id);
+  for (let i = 0; i < ids.length; i += 500) {
+    const batchIds = ids.slice(i, i + 500);
+    await supabase
+      .from('ventas_staging')
+      .update({ procesado: true })
+      .in('id', batchIds);
+  }
 
   return results;
 }
@@ -161,7 +224,7 @@ async function procesarVentasStaging(periodo: string) {
 // =============================================================================
 // PROCESAR GASTOS STAGING (TypeScript directo)
 // =============================================================================
-async function procesarGastosStaging(periodo: string) {
+async function procesarGastosStaging(periodo: string, reprocesar: boolean = false) {
   const results = {
     gastos_detalle_insertados: 0,
     total_facturacion: 0,
@@ -171,22 +234,30 @@ async function procesarGastosStaging(periodo: string) {
     total_rentabilidad: 0,
     total_sin_clasificar: 0,
     total_general: 0,
+    registros_leidos: 0,
   };
 
-  // 1. Obtener datos de staging pendientes
-  const { data: gastosStaging, error: errorStaging } = await supabase
-    .from('gastos_staging')
-    .select('*')
-    .eq('procesado', false);
+  // 1. Si reprocesar, primero resetear el estado
+  if (reprocesar) {
+    await supabase
+      .from('gastos_staging')
+      .update({ procesado: false })
+      .eq('procesado', true);
+    console.log('Registros de gastos_staging reseteados');
+  }
 
-  if (errorStaging) throw new Error(`Error leyendo gastos_staging: ${errorStaging.message}`);
+  // 2. Obtener TODOS los datos de staging pendientes (con paginación)
+  console.log('Obteniendo registros de gastos_staging...');
+  const gastosStaging = await fetchAllRecords('gastos_staging', { column: 'procesado', value: false });
+
   if (!gastosStaging || gastosStaging.length === 0) {
     return { ...results, mensaje: 'No hay gastos pendientes de procesar' };
   }
 
+  results.registros_leidos = gastosStaging.length;
   console.log(`Procesando ${gastosStaging.length} registros de gastos_staging`);
 
-  // 2. Obtener clasificaciones maestras
+  // 3. Obtener clasificaciones maestras
   const { data: clasificacionesMaestras } = await supabase
     .from('gastos_clasificacion_maestra')
     .select('*');
@@ -198,7 +269,7 @@ async function procesarGastosStaging(periodo: string) {
     ]) || []
   );
 
-  // 3. Aplicar clasificación a cada gasto
+  // 4. Aplicar clasificación a cada gasto
   const gastosConClasificacion = gastosStaging.map(g => {
     let clasificacion = g.clasificacion;
     let seAnaliza = g.se_analiza ?? true;
@@ -216,7 +287,7 @@ async function procesarGastosStaging(periodo: string) {
     return { ...g, clasificacion, se_analiza: seAnaliza };
   });
 
-  // 4. Calcular totales por categoría
+  // 5. Calcular totales por categoría
   let cat1_facturacion = 0;
   let cat2_ocupacion = 0;
   let cat3_credito = 0;
@@ -253,14 +324,14 @@ async function procesarGastosStaging(periodo: string) {
   const total_clasificado = cat1_facturacion + cat2_ocupacion + cat3_credito + cat4_rentabilidad + cat5_movimiento;
   const total_general = total_clasificado + sin_clasificar;
 
-  // 5. Calcular pesos (porcentajes)
+  // 6. Calcular pesos (porcentajes)
   const peso_facturacion = total_clasificado > 0 ? cat1_facturacion / total_clasificado : 0;
   const peso_ocupacion = total_clasificado > 0 ? cat2_ocupacion / total_clasificado : 0;
   const peso_credito = total_clasificado > 0 ? cat3_credito / total_clasificado : 0;
   const peso_rentabilidad = total_clasificado > 0 ? cat4_rentabilidad / total_clasificado : 0;
   const peso_movimiento = total_clasificado > 0 ? cat5_movimiento / total_clasificado : 0;
 
-  // 6. Calcular finales (distribuir sin_clasificar proporcionalmente)
+  // 7. Calcular finales (distribuir sin_clasificar proporcionalmente)
   const final_facturacion = cat1_facturacion + (peso_facturacion * sin_clasificar);
   const final_ocupacion = cat2_ocupacion + (peso_ocupacion * sin_clasificar);
   const final_credito = cat3_credito + (peso_credito * sin_clasificar);
@@ -277,11 +348,11 @@ async function procesarGastosStaging(periodo: string) {
     total_general
   });
 
-  // 7. Eliminar datos anteriores del período
+  // 8. Eliminar datos anteriores del período
   await supabase.from('gastos_detalle').delete().eq('periodo', periodo);
   await supabase.from('gastos_mensuales').delete().eq('periodo', periodo);
 
-  // 8. Insertar en gastos_mensuales
+  // 9. Insertar en gastos_mensuales
   const { data: gastosMensuales, error: errorMensual } = await supabase
     .from('gastos_mensuales')
     .insert({
@@ -312,7 +383,7 @@ async function procesarGastosStaging(periodo: string) {
 
   const gastosMensualesId = gastosMensuales.id;
 
-  // 9. Insertar en gastos_detalle (en lotes de 500)
+  // 10. Insertar en gastos_detalle (en lotes de 500)
   const detalles = gastosConClasificacion.map(g => ({
     gastos_mensuales_id: gastosMensualesId,
     periodo,
@@ -337,11 +408,15 @@ async function procesarGastosStaging(periodo: string) {
     else results.gastos_detalle_insertados += batch.length;
   }
 
-  // 10. Marcar como procesados
-  await supabase
-    .from('gastos_staging')
-    .update({ procesado: true })
-    .eq('procesado', false);
+  // 11. Marcar como procesados (en lotes)
+  const ids = gastosStaging.map(g => g.id);
+  for (let i = 0; i < ids.length; i += 500) {
+    const batchIds = ids.slice(i, i + 500);
+    await supabase
+      .from('gastos_staging')
+      .update({ procesado: true })
+      .in('id', batchIds);
+  }
 
   results.total_facturacion = final_facturacion;
   results.total_ocupacion = final_ocupacion;
@@ -360,7 +435,7 @@ async function procesarGastosStaging(periodo: string) {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { periodo } = body;
+    const { periodo, reprocesar = false } = body;
 
     if (!periodo) {
       return NextResponse.json(
@@ -387,7 +462,7 @@ export async function POST(request: NextRequest) {
     // 1. Procesar ventas
     console.log('Procesando ventas staging...');
     try {
-      results.ventas = await procesarVentasStaging(periodo);
+      results.ventas = await procesarVentasStaging(periodo, reprocesar);
       console.log('Ventas procesadas:', results.ventas);
     } catch (error) {
       console.error('Error procesando ventas:', error);
@@ -397,7 +472,7 @@ export async function POST(request: NextRequest) {
     // 2. Procesar gastos
     console.log('Procesando gastos staging...');
     try {
-      results.gastos = await procesarGastosStaging(periodo);
+      results.gastos = await procesarGastosStaging(periodo, reprocesar);
       console.log('Gastos procesados:', results.gastos);
     } catch (error) {
       console.error('Error procesando gastos:', error);
@@ -483,6 +558,41 @@ export async function GET() {
 
   } catch (error) {
     console.error('Error verificando staging:', error);
+    return NextResponse.json(
+      { success: false, error: error instanceof Error ? error.message : 'Error desconocido' },
+      { status: 500 }
+    );
+  }
+}
+
+// =============================================================================
+// DELETE: Resetear estado de staging (marcar todo como no procesado)
+// =============================================================================
+export async function DELETE() {
+  try {
+    // Resetear ventas_staging
+    const { error: errorVentas } = await supabase
+      .from('ventas_staging')
+      .update({ procesado: false })
+      .eq('procesado', true);
+
+    if (errorVentas) throw new Error(`Error reseteando ventas_staging: ${errorVentas.message}`);
+
+    // Resetear gastos_staging
+    const { error: errorGastos } = await supabase
+      .from('gastos_staging')
+      .update({ procesado: false })
+      .eq('procesado', true);
+
+    if (errorGastos) throw new Error(`Error reseteando gastos_staging: ${errorGastos.message}`);
+
+    return NextResponse.json({
+      success: true,
+      message: 'Tablas staging reseteadas. Todos los registros están pendientes de procesar.'
+    });
+
+  } catch (error) {
+    console.error('Error reseteando staging:', error);
     return NextResponse.json(
       { success: false, error: error instanceof Error ? error.message : 'Error desconocido' },
       { status: 500 }

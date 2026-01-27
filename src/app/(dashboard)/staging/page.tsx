@@ -32,6 +32,8 @@ interface ProcessResult {
       proveedores_procesados?: number;
       productos_procesados?: number;
       metricas_insertadas?: number;
+      registros_leidos?: number;
+      mensaje?: string;
     };
     gastos?: {
       gastos_detalle_insertados?: number;
@@ -41,6 +43,8 @@ interface ProcessResult {
       total_credito?: number;
       total_rentabilidad?: number;
       total_general?: number;
+      registros_leidos?: number;
+      mensaje?: string;
     };
     verificacion?: {
       metricas_producto: number;
@@ -63,6 +67,7 @@ export default function StagingPage() {
   const [loading, setLoading] = useState(false);
   const [calculating, setCalculating] = useState(false);
   const [checkingStatus, setCheckingStatus] = useState(false);
+  const [reprocesar, setReprocesar] = useState(false);
   const [stagingStatus, setStagingStatus] = useState<StagingStatus[] | null>(null);
   const [result, setResult] = useState<ProcessResult | null>(null);
   const [calculateResult, setCalculateResult] = useState<CalculateResult | null>(null);
@@ -110,7 +115,7 @@ export default function StagingPage() {
       const response = await fetch('/api/staging/process', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ periodo: formattedPeriodo }),
+        body: JSON.stringify({ periodo: formattedPeriodo, reprocesar }),
       });
 
       const data = await response.json();
@@ -260,22 +265,23 @@ export default function StagingPage() {
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <div className="flex flex-col gap-4 sm:flex-row sm:items-end">
-              <div className="flex-1">
-                <Label htmlFor="periodo">Período (AAAA-MM)</Label>
-                <Input
-                  id="periodo"
-                  type="month"
-                  value={periodo}
-                  onChange={(e) => setPeriodo(e.target.value)}
-                  placeholder="2024-12"
-                  className="mt-1"
-                />
-              </div>
-              <Button
-                onClick={processStaging}
-                disabled={loading || !periodo}
-                className="min-w-[200px]"
+            <div className="flex flex-col gap-4">
+              <div className="flex flex-col gap-4 sm:flex-row sm:items-end">
+                <div className="flex-1">
+                  <Label htmlFor="periodo">Período (AAAA-MM)</Label>
+                  <Input
+                    id="periodo"
+                    type="month"
+                    value={periodo}
+                    onChange={(e) => setPeriodo(e.target.value)}
+                    placeholder="2024-12"
+                    className="mt-1"
+                  />
+                </div>
+                <Button
+                  onClick={processStaging}
+                  disabled={loading || !periodo}
+                  className="min-w-[200px]"
                 size="lg"
               >
                 {loading ? (
@@ -289,7 +295,22 @@ export default function StagingPage() {
                     Procesar Staging
                   </>
                 )}
-              </Button>
+                </Button>
+              </div>
+
+              {/* Checkbox reprocesar */}
+              <div className="flex items-center gap-2 rounded-lg bg-yellow-50 p-3 border border-yellow-200">
+                <input
+                  type="checkbox"
+                  id="reprocesar"
+                  checked={reprocesar}
+                  onChange={(e) => setReprocesar(e.target.checked)}
+                  className="h-4 w-4 rounded border-gray-300"
+                />
+                <Label htmlFor="reprocesar" className="text-sm text-yellow-800 cursor-pointer">
+                  <strong>Reprocesar:</strong> Resetear registros ya procesados y volver a procesar todos (usar si los datos ya fueron procesados antes)
+                </Label>
+              </div>
             </div>
           </CardContent>
         </Card>
@@ -325,7 +346,14 @@ export default function StagingPage() {
                 {result.resultados?.ventas && (
                   <div className="rounded-lg bg-white p-4">
                     <h4 className="mb-3 font-semibold text-gray-800">Ventas Procesadas</h4>
+                    {result.resultados.ventas.mensaje && (
+                      <p className="mb-2 text-sm text-yellow-600">{result.resultados.ventas.mensaje}</p>
+                    )}
                     <ul className="space-y-1 text-sm">
+                      <li className="flex justify-between">
+                        <span className="text-gray-600">Registros leídos:</span>
+                        <span className="font-medium text-blue-600">{result.resultados.ventas.registros_leidos || 0}</span>
+                      </li>
                       <li className="flex justify-between">
                         <span className="text-gray-600">Subrubros:</span>
                         <span className="font-medium">{result.resultados.ventas.subrubros_procesados || 0}</span>
