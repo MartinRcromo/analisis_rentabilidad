@@ -1,10 +1,22 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { createClient, SupabaseClient } from '@supabase/supabase-js';
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
+// Lazy initialization to avoid build-time errors
+let supabase: SupabaseClient | null = null;
 
-const supabase = createClient(supabaseUrl, supabaseKey);
+function getSupabase(): SupabaseClient {
+  if (!supabase) {
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
+    if (!supabaseUrl || !supabaseKey) {
+      throw new Error('Supabase environment variables are not configured');
+    }
+
+    supabase = createClient(supabaseUrl, supabaseKey);
+  }
+  return supabase;
+}
 
 // =============================================================================
 // HELPER: Obtener todos los registros con paginación
@@ -14,9 +26,10 @@ async function fetchAllRecords(table: string, filter?: { column: string; value: 
   let allRecords: Record<string, unknown>[] = [];
   let offset = 0;
   let hasMore = true;
+  const db = getSupabase();
 
   while (hasMore) {
-    let query = supabase
+    let query = db
       .from(table)
       .select('*')
       .range(offset, offset + PAGE_SIZE - 1);
@@ -45,6 +58,7 @@ async function fetchAllRecords(table: string, filter?: { column: string; value: 
 // PROCESAR VENTAS STAGING (TypeScript directo)
 // =============================================================================
 async function procesarVentasStaging(periodo: string, reprocesar: boolean = false) {
+  const db = getSupabase();
   const results = {
     subrubros_procesados: 0,
     proveedores_procesados: 0,
@@ -57,7 +71,7 @@ async function procesarVentasStaging(periodo: string, reprocesar: boolean = fals
 
   // 1. Si reprocesar, primero resetear el estado
   if (reprocesar) {
-    await supabase
+    await db
       .from('ventas_staging')
       .update({ procesado: false })
       .eq('procesado', true);
@@ -85,7 +99,7 @@ async function procesarVentasStaging(periodo: string, reprocesar: boolean = fals
 
   // 4. Upsert subrubros
   if (subrubros.length > 0) {
-    const { error } = await supabase
+    const { error } = await db
       .from('subrubros')
       .upsert(subrubros.map(nombre => ({ nombre })), { onConflict: 'nombre' });
     if (error) console.error('Error upsert subrubros:', error);
@@ -102,7 +116,7 @@ async function procesarVentasStaging(periodo: string, reprocesar: boolean = fals
     // Insertar en lotes de 500
     for (let i = 0; i < proveedoresUnicos.length; i += 500) {
       const batch = proveedoresUnicos.slice(i, i + 500);
-      const { error } = await supabase
+      const { error } = await db
         .from('proveedores')
         .upsert(batch, { onConflict: 'codigo' });
       if (error) console.error('Error upsert proveedores batch:', error);
@@ -112,7 +126,7 @@ async function procesarVentasStaging(periodo: string, reprocesar: boolean = fals
 
   // 6. Upsert compradores
   if (compradores.length > 0) {
-    const { error } = await supabase
+    const { error } = await db
       .from('compradores')
       .upsert(compradores.map(codigo => ({ codigo })), { onConflict: 'codigo' });
     if (error) console.error('Error upsert compradores:', error);
@@ -121,7 +135,7 @@ async function procesarVentasStaging(periodo: string, reprocesar: boolean = fals
 
   // 7. Upsert categorías
   if (categorias.length > 0) {
-    const { error } = await supabase
+    const { error } = await db
       .from('categorias')
       .upsert(categorias.map(codigo => ({ codigo })), { onConflict: 'codigo' });
     if (error) console.error('Error upsert categorías:', error);
@@ -129,10 +143,10 @@ async function procesarVentasStaging(periodo: string, reprocesar: boolean = fals
   }
 
   // 8. Obtener IDs de tablas maestras
-  const { data: subrubrosDb } = await supabase.from('subrubros').select('id, nombre');
-  const { data: proveedoresDb } = await supabase.from('proveedores').select('id, codigo');
-  const { data: compradoresDb } = await supabase.from('compradores').select('id, codigo');
-  const { data: categoriasDb } = await supabase.from('categorias').select('id, codigo');
+  const { data: subrubrosDb } = await db.from('subrubros').select('id, nombre');
+  const { data: proveedoresDb } = await db.from('proveedores').select('id, codigo');
+  const { data: compradoresDb } = await db.from('compradores').select('id, codigo');
+  const { data: categoriasDb } = await db.from('categorias').select('id, codigo');
 
   const subrubroMap = new Map(subrubrosDb?.map(s => [s.nombre, s.id]) || []);
   const proveedorMap = new Map(proveedoresDb?.map(p => [p.codigo, p.id]) || []);
@@ -164,7 +178,7 @@ async function procesarVentasStaging(periodo: string, reprocesar: boolean = fals
     // Insertar en lotes de 500
     for (let i = 0; i < productosUnicos.length; i += 500) {
       const batch = productosUnicos.slice(i, i + 500);
-      const { error } = await supabase
+      const { error } = await db
         .from('productos')
         .upsert(batch, { onConflict: 'codigo' });
       if (error) console.error(`Error upsert productos batch ${i}:`, error);
@@ -181,7 +195,7 @@ async function procesarVentasStaging(periodo: string, reprocesar: boolean = fals
   console.log(`Productos en BD: ${productoMap.size}`);
 
   // 11. Eliminar métricas anteriores del período
-  await supabase.from('metricas_producto').delete().eq('periodo', periodo);
+  await db.from('metricas_producto').delete().eq('periodo', periodo);
 
   // 12. Insertar métricas (en lotes de 500)
   const metricas = ventasStaging
@@ -209,7 +223,7 @@ async function procesarVentasStaging(periodo: string, reprocesar: boolean = fals
   if (metricas.length > 0) {
     for (let i = 0; i < metricas.length; i += 500) {
       const batch = metricas.slice(i, i + 500);
-      const { error } = await supabase.from('metricas_producto').insert(batch);
+      const { error } = await db.from('metricas_producto').insert(batch);
       if (error) {
         console.error(`Error insertando métricas batch ${i}:`, error);
       } else {
@@ -222,7 +236,7 @@ async function procesarVentasStaging(periodo: string, reprocesar: boolean = fals
   const ids = ventasStaging.map(v => v.id);
   for (let i = 0; i < ids.length; i += 500) {
     const batchIds = ids.slice(i, i + 500);
-    await supabase
+    await db
       .from('ventas_staging')
       .update({ procesado: true })
       .in('id', batchIds);
@@ -235,6 +249,7 @@ async function procesarVentasStaging(periodo: string, reprocesar: boolean = fals
 // PROCESAR GASTOS STAGING (TypeScript directo)
 // =============================================================================
 async function procesarGastosStaging(periodo: string, reprocesar: boolean = false) {
+  const db = getSupabase();
   const results = {
     gastos_detalle_insertados: 0,
     total_facturacion: 0,
@@ -249,7 +264,7 @@ async function procesarGastosStaging(periodo: string, reprocesar: boolean = fals
 
   // 1. Si reprocesar, primero resetear el estado
   if (reprocesar) {
-    await supabase
+    await db
       .from('gastos_staging')
       .update({ procesado: false })
       .eq('procesado', true);
@@ -268,7 +283,7 @@ async function procesarGastosStaging(periodo: string, reprocesar: boolean = fals
   console.log(`Procesando ${gastosStaging.length} registros de gastos_staging`);
 
   // 3. Obtener clasificaciones maestras
-  const { data: clasificacionesMaestras } = await supabase
+  const { data: clasificacionesMaestras } = await db
     .from('gastos_clasificacion_maestra')
     .select('*');
 
@@ -367,11 +382,11 @@ async function procesarGastosStaging(periodo: string, reprocesar: boolean = fals
   });
 
   // 8. Eliminar datos anteriores del período
-  await supabase.from('gastos_detalle').delete().eq('periodo', periodo);
-  await supabase.from('gastos_mensuales').delete().eq('periodo', periodo);
+  await db.from('gastos_detalle').delete().eq('periodo', periodo);
+  await db.from('gastos_mensuales').delete().eq('periodo', periodo);
 
   // 9. Insertar en gastos_mensuales
-  const { data: gastosMensuales, error: errorMensual } = await supabase
+  const { data: gastosMensuales, error: errorMensual } = await db
     .from('gastos_mensuales')
     .insert({
       periodo,
@@ -425,7 +440,7 @@ async function procesarGastosStaging(periodo: string, reprocesar: boolean = fals
 
   for (let i = 0; i < detalles.length; i += 500) {
     const batch = detalles.slice(i, i + 500);
-    const { error } = await supabase.from('gastos_detalle').insert(batch);
+    const { error } = await db.from('gastos_detalle').insert(batch);
     if (error) console.error(`Error insertando detalle batch ${i}:`, error);
     else results.gastos_detalle_insertados += batch.length;
   }
@@ -434,7 +449,7 @@ async function procesarGastosStaging(periodo: string, reprocesar: boolean = fals
   const ids = gastosStaging.map(g => g.id);
   for (let i = 0; i < ids.length; i += 500) {
     const batchIds = ids.slice(i, i + 500);
-    await supabase
+    await db
       .from('gastos_staging')
       .update({ procesado: true })
       .in('id', batchIds);
@@ -502,12 +517,13 @@ export async function POST(request: NextRequest) {
     }
 
     // 3. Verificar resultados
-    const { count: metricasCount } = await supabase
+    const db = getSupabase();
+    const { count: metricasCount } = await db
       .from('metricas_producto')
       .select('*', { count: 'exact', head: true })
       .eq('periodo', periodo);
 
-    const { data: gastosMensuales } = await supabase
+    const { data: gastosMensuales } = await db
       .from('gastos_mensuales')
       .select('*')
       .eq('periodo', periodo)
@@ -541,21 +557,22 @@ export async function POST(request: NextRequest) {
 // =============================================================================
 export async function GET() {
   try {
+    const db = getSupabase();
     // Consultar directamente las tablas staging
-    const { count: ventasTotal } = await supabase
+    const { count: ventasTotal } = await db
       .from('ventas_staging')
       .select('*', { count: 'exact', head: true });
 
-    const { count: ventasPendientes } = await supabase
+    const { count: ventasPendientes } = await db
       .from('ventas_staging')
       .select('*', { count: 'exact', head: true })
       .eq('procesado', false);
 
-    const { count: gastosTotal } = await supabase
+    const { count: gastosTotal } = await db
       .from('gastos_staging')
       .select('*', { count: 'exact', head: true });
 
-    const { count: gastosPendientes } = await supabase
+    const { count: gastosPendientes } = await db
       .from('gastos_staging')
       .select('*', { count: 'exact', head: true })
       .eq('procesado', false);
@@ -592,8 +609,9 @@ export async function GET() {
 // =============================================================================
 export async function DELETE() {
   try {
+    const db = getSupabase();
     // Resetear ventas_staging
-    const { error: errorVentas } = await supabase
+    const { error: errorVentas } = await db
       .from('ventas_staging')
       .update({ procesado: false })
       .eq('procesado', true);
@@ -601,7 +619,7 @@ export async function DELETE() {
     if (errorVentas) throw new Error(`Error reseteando ventas_staging: ${errorVentas.message}`);
 
     // Resetear gastos_staging
-    const { error: errorGastos } = await supabase
+    const { error: errorGastos } = await db
       .from('gastos_staging')
       .update({ procesado: false })
       .eq('procesado', true);
