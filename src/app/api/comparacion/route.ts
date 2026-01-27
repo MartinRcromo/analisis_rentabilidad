@@ -38,7 +38,7 @@ export async function GET(request: NextRequest) {
     // Obtener gastos totales del período
     const { data: gastos } = await supabase
       .from('gastos_mensuales')
-      .select('cat1_facturacion_final, cat2_volumen_final, cat3_credito_final, cat4_rentabilidad_final')
+      .select('cat1_facturacion_final, cat2_volumen_final, cat3_credito_final, cat4_rentabilidad_final, cat5_movimiento_final')
       .eq('periodo', periodoActual)
       .single();
 
@@ -46,7 +46,8 @@ export async function GET(request: NextRequest) {
       ? (gastos.cat1_facturacion_final || 0) +
         (gastos.cat2_volumen_final || 0) +
         (gastos.cat3_credito_final || 0) +
-        (gastos.cat4_rentabilidad_final || 0)
+        (gastos.cat4_rentabilidad_final || 0) +
+        (gastos.cat5_movimiento_final || 0)
       : 0;
 
     // Transformar datos por empresa
@@ -95,6 +96,7 @@ export async function GET(request: NextRequest) {
         volumen: gastos?.cat2_volumen_final || 0,
         credito: gastos?.cat3_credito_final || 0,
         rentabilidad: gastos?.cat4_rentabilidad_final || 0,
+        movimiento: gastos?.cat5_movimiento_final || 0,
       },
     });
   } catch (error) {

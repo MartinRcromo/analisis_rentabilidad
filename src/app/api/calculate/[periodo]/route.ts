@@ -31,7 +31,7 @@ export async function POST(
     // 2. Obtener totales del período
     const { data: totalesData, error: errorTotales } = await supabase
       .from('metricas_producto')
-      .select('importe_ventas, stock_volumen, stock_costo, margen_bruto')
+      .select('importe_ventas, stock_volumen, stock_costo, margen_bruto, veces_pedido')
       .eq('periodo', periodo);
 
     if (errorTotales || !totalesData || totalesData.length === 0) {
@@ -46,10 +46,12 @@ export async function POST(
       total_volumen_m3: totalesData.reduce((sum, m) => sum + (m.stock_volumen || 0), 0),
       total_stock_valorizado: totalesData.reduce((sum, m) => sum + (m.stock_costo || 0), 0),
       total_margen_bruto: totalesData.reduce((sum, m) => sum + (m.margen_bruto || 0), 0),
+      total_veces_pedido: totalesData.reduce((sum, m) => sum + (m.veces_pedido || 0), 0),
       gastos_facturacion: gastos.cat1_facturacion_final,
       gastos_volumen: gastos.cat2_volumen_final,
       gastos_credito: gastos.cat3_credito_final,
       gastos_rentabilidad: gastos.cat4_rentabilidad_final,
+      gastos_movimiento: gastos.cat5_movimiento_final,
     };
 
     // 3. Obtener todas las métricas del período
@@ -73,6 +75,7 @@ export async function POST(
       const markup_pct = m.markup_pct || 0;
       const stock_costo = m.stock_costo || 0;
       const stock_volumen = m.stock_volumen || 0;
+      const veces_pedido = m.veces_pedido || 0;
 
       // Calcular porcentajes de asignación
       const porcentaje_facturacion =
@@ -87,12 +90,16 @@ export async function POST(
       const porcentaje_markup =
         totales.total_margen_bruto > 0 ? margen_bruto / totales.total_margen_bruto : 0;
 
+      const porcentaje_movimiento =
+        totales.total_veces_pedido > 0 ? veces_pedido / totales.total_veces_pedido : 0;
+
       // Asignar gastos
       const gasto_facturacion = porcentaje_facturacion * totales.gastos_facturacion;
       const gasto_volumen = porcentaje_volumen * totales.gastos_volumen;
       const gasto_credito = porcentaje_credito * totales.gastos_credito;
       const gasto_markup = porcentaje_markup * totales.gastos_rentabilidad;
-      const gasto_total = gasto_facturacion + gasto_volumen + gasto_credito + gasto_markup;
+      const gasto_movimiento = porcentaje_movimiento * totales.gastos_movimiento;
+      const gasto_total = gasto_facturacion + gasto_volumen + gasto_credito + gasto_markup + gasto_movimiento;
 
       // Resultado
       const resultado = margen_bruto - gasto_total;
@@ -109,10 +116,12 @@ export async function POST(
         porcentaje_volumen,
         porcentaje_credito,
         porcentaje_markup,
+        porcentaje_movimiento,
         gasto_facturacion,
         gasto_volumen,
         gasto_credito,
         gasto_markup,
+        gasto_movimiento,
         gasto_total,
         resultado,
         en_perdida,

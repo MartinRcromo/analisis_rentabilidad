@@ -83,12 +83,14 @@ export async function GET(request: NextRequest) {
           volumen: gastos.cat2_volumen_final,
           credito: gastos.cat3_credito_final,
           rentabilidad: gastos.cat4_rentabilidad_final,
+          movimiento: gastos.cat5_movimiento_final,
         }
       : {
           facturacion: 0,
           volumen: 0,
           credito: 0,
           rentabilidad: 0,
+          movimiento: 0,
         };
 
     // 3. Obtener evolución últimos 6 meses

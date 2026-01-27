@@ -132,7 +132,7 @@ export async function GET(
     // Obtener totales del período para simulador
     const { data: totalesData } = await supabase
       .from('metricas_producto')
-      .select('importe_ventas, stock_volumen, stock_costo, margen_bruto')
+      .select('importe_ventas, stock_volumen, stock_costo, margen_bruto, veces_pedido')
       .eq('periodo', periodoActual);
 
     const { data: gastos } = await supabase
@@ -146,10 +146,12 @@ export async function GET(
       total_volumen_m3: (totalesData || []).reduce((sum, m) => sum + (m.stock_volumen || 0), 0),
       total_stock_valorizado: (totalesData || []).reduce((sum, m) => sum + (m.stock_costo || 0), 0),
       total_margen_bruto: (totalesData || []).reduce((sum, m) => sum + (m.margen_bruto || 0), 0),
+      total_veces_pedido: (totalesData || []).reduce((sum, m) => sum + (m.veces_pedido || 0), 0),
       gastos_facturacion: gastos?.cat1_facturacion_final || 0,
       gastos_volumen: gastos?.cat2_volumen_final || 0,
       gastos_credito: gastos?.cat3_credito_final || 0,
       gastos_rentabilidad: gastos?.cat4_rentabilidad_final || 0,
+      gastos_movimiento: gastos?.cat5_movimiento_final || 0,
     };
 
     // Calcular meses de stock
