@@ -377,32 +377,87 @@ async function procesarGastosStaging(periodo: string, reprocesar: boolean = fals
     total_sin_clasificar: 0,
     total_general: 0,
     registros_leidos: 0,
+    // Nuevos campos para diagnóstico (igual que ventas)
+    errores_detallados: [] as string[],
+    paso_actual: '',
   };
 
   // 1. Si reprocesar, primero resetear el estado
   if (reprocesar) {
-    await db
+    results.paso_actual = 'Reseteando registros de gastos...';
+
+    // Contar cuántos hay que resetear
+    const { count: countToReset } = await db
+      .from('gastos_staging')
+      .select('*', { count: 'exact', head: true })
+      .eq('procesado', true);
+
+    console.log(`Gastos a resetear: ${countToReset}`);
+
+    const { error: resetError } = await db
       .from('gastos_staging')
       .update({ procesado: false })
       .eq('procesado', true);
-    console.log('Registros de gastos_staging reseteados');
+
+    if (resetError) {
+      const errorMsg = `Error reseteando gastos_staging: ${resetError.message}`;
+      console.error(errorMsg);
+      results.errores_detallados.push(errorMsg);
+    } else {
+      console.log(`Registros de gastos_staging reseteados: ${countToReset}`);
+    }
   }
 
   // 2. Obtener TODOS los datos de staging pendientes (con paginación)
+  results.paso_actual = 'Obteniendo registros de gastos_staging...';
   console.log('Obteniendo registros de gastos_staging...');
   const gastosStaging = await fetchAllRecords('gastos_staging', { column: 'procesado', value: false });
 
+  // Verificación adicional: contar total en la tabla
+  const { count: totalGastos } = await db
+    .from('gastos_staging')
+    .select('*', { count: 'exact', head: true });
+
+  const { count: gastosProcesados } = await db
+    .from('gastos_staging')
+    .select('*', { count: 'exact', head: true })
+    .eq('procesado', true);
+
+  console.log(`Estado gastos_staging: Total=${totalGastos}, Procesados=${gastosProcesados}, Pendientes obtenidos=${gastosStaging.length}`);
+
   if (!gastosStaging || gastosStaging.length === 0) {
+    results.errores_detallados.push(`No hay gastos pendientes. Total en tabla: ${totalGastos}, Ya procesados: ${gastosProcesados}`);
     return { ...results, mensaje: 'No hay gastos pendientes de procesar' };
   }
 
   results.registros_leidos = gastosStaging.length;
   console.log(`Procesando ${gastosStaging.length} registros de gastos_staging`);
 
+  // Verificar datos de ejemplo para diagnóstico
+  if (gastosStaging.length > 0) {
+    const ejemplo = gastosStaging[0];
+    console.log('Ejemplo de registro gastos_staging:', {
+      id: ejemplo.id,
+      importe_gasto: ejemplo.importe_gasto,
+      tipo_importe: typeof ejemplo.importe_gasto,
+      clasificacion: ejemplo.clasificacion,
+      sector: ejemplo.sector,
+      tipogasto: ejemplo.tipogasto
+    });
+  }
+
   // 3. Obtener clasificaciones maestras
-  const { data: clasificacionesMaestras } = await db
+  results.paso_actual = 'Obteniendo clasificaciones maestras...';
+  const { data: clasificacionesMaestras, error: errorClasif } = await db
     .from('gastos_clasificacion_maestra')
     .select('*');
+
+  if (errorClasif) {
+    console.error('Error obteniendo clasificaciones maestras:', errorClasif);
+    results.errores_detallados.push(`Error obteniendo clasificaciones: ${errorClasif.message}`);
+  }
+
+  console.log(`Clasificaciones maestras encontradas: ${clasificacionesMaestras?.length || 0}`);
 
   const clasificacionMap = new Map(
     clasificacionesMaestras?.map(c => [
@@ -412,12 +467,15 @@ async function procesarGastosStaging(periodo: string, reprocesar: boolean = fals
   );
 
   // 4. Aplicar clasificación a cada gasto y calcular totales
+  results.paso_actual = 'Calculando totales por categoría...';
   let cat1_facturacion = 0;
   let cat2_ocupacion = 0;
   let cat3_credito = 0;
   let cat4_rentabilidad = 0;
   let cat5_movimiento = 0;
   let sin_clasificar = 0;
+  let registros_con_importe_cero = 0;
+  let registros_con_importe_null = 0;
 
   // Procesar cada gasto: aplicar clasificación y sumar
   interface GastoConClasificacion {
@@ -446,8 +504,16 @@ async function procesarGastosStaging(periodo: string, reprocesar: boolean = fals
     gastosConClasificacion.push({ original: g, clasificacion, se_analiza: seAnaliza });
 
     // Sumar al total correspondiente
-    const importe = Number(g.importe_gasto) || 0;
+    const rawImporte = g.importe_gasto;
+    const importe = Number(rawImporte) || 0;
     const cat = clasificacion.toLowerCase().trim();
+
+    // Diagnóstico de importes
+    if (rawImporte === null || rawImporte === undefined) {
+      registros_con_importe_null++;
+    } else if (importe === 0) {
+      registros_con_importe_cero++;
+    }
 
     switch (cat) {
       case 'facturacion':
@@ -474,6 +540,20 @@ async function procesarGastosStaging(periodo: string, reprocesar: boolean = fals
   const total_clasificado = cat1_facturacion + cat2_ocupacion + cat3_credito + cat4_rentabilidad + cat5_movimiento;
   const total_general = total_clasificado + sin_clasificar;
 
+  // Log diagnóstico de importes
+  console.log('Diagnóstico de importes:', {
+    total_registros: gastosStaging.length,
+    registros_con_importe_null: registros_con_importe_null,
+    registros_con_importe_cero: registros_con_importe_cero,
+    registros_con_importe_valido: gastosStaging.length - registros_con_importe_null - registros_con_importe_cero
+  });
+
+  if (registros_con_importe_null > 0 || registros_con_importe_cero > 0) {
+    results.errores_detallados.push(
+      `Advertencia: ${registros_con_importe_null} registros con importe NULL, ${registros_con_importe_cero} registros con importe 0`
+    );
+  }
+
   // 6. Calcular pesos (porcentajes)
   const peso_facturacion = total_clasificado > 0 ? cat1_facturacion / total_clasificado : 0;
   const peso_ocupacion = total_clasificado > 0 ? cat2_ocupacion / total_clasificado : 0;
@@ -498,11 +578,14 @@ async function procesarGastosStaging(periodo: string, reprocesar: boolean = fals
     total_general
   });
 
+  results.paso_actual = 'Eliminando datos anteriores del período...';
+
   // 8. Eliminar datos anteriores del período
   await db.from('gastos_detalle').delete().eq('periodo', periodo);
   await db.from('gastos_mensuales').delete().eq('periodo', periodo);
 
   // 9. Insertar en gastos_mensuales
+  results.paso_actual = 'Insertando en gastos_mensuales...';
   const { data: gastosMensuales, error: errorMensual } = await db
     .from('gastos_mensuales')
     .insert({
@@ -529,11 +612,26 @@ async function procesarGastosStaging(periodo: string, reprocesar: boolean = fals
     .select()
     .single();
 
-  if (errorMensual) throw new Error(`Error insertando gastos_mensuales: ${errorMensual.message}`);
+  if (errorMensual) {
+    results.errores_detallados.push(`Error insertando gastos_mensuales: ${errorMensual.message}`);
+    throw new Error(`Error insertando gastos_mensuales: ${errorMensual.message}`);
+  }
 
-  const gastosMensualesId = gastosMensuales.id;
+  console.log('gastos_mensuales insertado con ID:', gastosMensuales?.id);
+
+  const gastosMensualesId = gastosMensuales?.id;
+
+  if (!gastosMensualesId) {
+    const errorMsg = 'Error: gastosMensualesId es null o undefined después de insertar';
+    console.error(errorMsg);
+    results.errores_detallados.push(errorMsg);
+    return results;
+  }
 
   // 10. Insertar en gastos_detalle (en lotes de 500)
+  results.paso_actual = `Preparando ${gastosConClasificacion.length} detalles para insertar...`;
+  console.log(`Preparando ${gastosConClasificacion.length} detalles para insertar con gastos_mensuales_id=${gastosMensualesId}`);
+
   const detalles = gastosConClasificacion.map(g => {
     const clasif = String(g.clasificacion || '').toLowerCase().trim();
     const orig = g.original;
@@ -555,23 +653,51 @@ async function procesarGastosStaging(periodo: string, reprocesar: boolean = fals
     };
   });
 
+  console.log(`Total de detalles a insertar: ${detalles.length}`);
+  results.paso_actual = `Insertando ${detalles.length} detalles en gastos_detalle...`;
+
+  let erroresDetalles = 0;
   for (let i = 0; i < detalles.length; i += 500) {
     const batch = detalles.slice(i, i + 500);
     const { error } = await db.from('gastos_detalle').insert(batch);
-    if (error) console.error(`Error insertando detalle batch ${i}:`, error);
-    else results.gastos_detalle_insertados += batch.length;
+    if (error) {
+      const errorMsg = `Error insertando detalle batch ${i}-${i+batch.length}: ${error.message} (code: ${error.code}, details: ${error.details || 'none'})`;
+      console.error(errorMsg);
+      results.errores_detallados.push(errorMsg);
+      erroresDetalles += batch.length;
+    } else {
+      results.gastos_detalle_insertados += batch.length;
+    }
   }
 
+  if (erroresDetalles > 0) {
+    results.errores_detallados.push(`Total de detalles con error: ${erroresDetalles}/${detalles.length}`);
+  }
+
+  console.log(`Detalles insertados: ${results.gastos_detalle_insertados}/${detalles.length}`);
+
   // 11. Marcar como procesados (en lotes)
+  results.paso_actual = 'Marcando registros como procesados...';
   const ids = gastosStaging.map(g => g.id);
+  let marcadosExitosos = 0;
   for (let i = 0; i < ids.length; i += 500) {
     const batchIds = ids.slice(i, i + 500);
-    await db
+    const { error } = await db
       .from('gastos_staging')
       .update({ procesado: true })
       .in('id', batchIds);
+    if (error) {
+      const errorMsg = `Error marcando gastos procesados batch ${i}-${i+batchIds.length}: ${error.message}`;
+      console.error(errorMsg);
+      results.errores_detallados.push(errorMsg);
+    } else {
+      marcadosExitosos += batchIds.length;
+    }
   }
 
+  console.log(`Gastos marcados como procesados: ${marcadosExitosos}/${ids.length}`);
+
+  results.paso_actual = 'Completado';
   results.total_facturacion = final_facturacion;
   results.total_ocupacion = final_ocupacion;
   results.total_movimiento = final_movimiento;
