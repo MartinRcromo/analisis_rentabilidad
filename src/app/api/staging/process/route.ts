@@ -49,7 +49,7 @@ async function procesarVentasStaging(periodo: string) {
 
   // 4. Upsert proveedores
   const proveedoresUnicos = proveedores.reduce((acc, p) => {
-    if (!acc.find(x => x.codigo === p.codigo)) acc.push(p);
+    if (!acc.find((x: { codigo: string; nombre: string }) => x.codigo === p.codigo)) acc.push(p);
     return acc;
   }, [] as typeof proveedores);
 
@@ -91,8 +91,9 @@ async function procesarVentasStaging(periodo: string) {
   const categoriaMap = new Map(categoriasDb?.map(c => [c.codigo, c.id]) || []);
 
   // 8. Upsert productos
+  type ProductoUnico = {codigo: string; nombre: string; empresa: string; subrubro_id: number | null; proveedor_id: number | null; comprador_id: number | null; categoria_id: number | null};
   const productosUnicos = ventasStaging.reduce((acc, v) => {
-    if (v.idproducto && !acc.find(x => x.codigo === v.idproducto)) {
+    if (v.idproducto && !acc.find((x: ProductoUnico) => x.codigo === v.idproducto)) {
       acc.push({
         codigo: v.idproducto,
         nombre: v.producto,
@@ -104,7 +105,7 @@ async function procesarVentasStaging(periodo: string) {
       });
     }
     return acc;
-  }, [] as Array<{codigo: string; nombre: string; empresa: string; subrubro_id: number | null; proveedor_id: number | null; comprador_id: number | null; categoria_id: number | null}>);
+  }, [] as ProductoUnico[]);
 
   if (productosUnicos.length > 0) {
     const { error } = await supabase
