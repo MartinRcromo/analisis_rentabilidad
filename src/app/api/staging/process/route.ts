@@ -279,10 +279,25 @@ async function procesarGastosStaging(periodo: string, reprocesar: boolean = fals
     ]) || []
   );
 
-  // 4. Aplicar clasificación a cada gasto
-  const gastosConClasificacion = gastosStaging.map(g => {
+  // 4. Aplicar clasificación a cada gasto y calcular totales
+  let cat1_facturacion = 0;
+  let cat2_ocupacion = 0;
+  let cat3_credito = 0;
+  let cat4_rentabilidad = 0;
+  let cat5_movimiento = 0;
+  let sin_clasificar = 0;
+
+  // Procesar cada gasto: aplicar clasificación y sumar
+  interface GastoConClasificacion {
+    original: Record<string, unknown>;
+    clasificacion: string;
+    se_analiza: boolean;
+  }
+  const gastosConClasificacion: GastoConClasificacion[] = [];
+
+  for (const g of gastosStaging) {
     let clasificacion = String(g.clasificacion || '');
-    let seAnaliza = g.se_analiza ?? true;
+    let seAnaliza = Boolean(g.se_analiza ?? true);
 
     // Si no tiene clasificación, buscar en maestra
     if (!clasificacion || clasificacion.trim() === '') {
@@ -292,24 +307,15 @@ async function procesarGastosStaging(periodo: string, reprocesar: boolean = fals
       const maestra = clasificacionMap.get(key);
       if (maestra) {
         clasificacion = maestra.clasificacion || '';
-        seAnaliza = maestra.se_analiza;
+        seAnaliza = Boolean(maestra.se_analiza);
       }
     }
 
-    return { ...g, clasificacion, se_analiza: seAnaliza };
-  });
+    gastosConClasificacion.push({ original: g, clasificacion, se_analiza: seAnaliza });
 
-  // 5. Calcular totales por categoría
-  let cat1_facturacion = 0;
-  let cat2_ocupacion = 0;
-  let cat3_credito = 0;
-  let cat4_rentabilidad = 0;
-  let cat5_movimiento = 0;
-  let sin_clasificar = 0;
-
-  for (const g of gastosConClasificacion) {
+    // Sumar al total correspondiente
     const importe = Number(g.importe_gasto) || 0;
-    const cat = String(g.clasificacion || '').toLowerCase().trim();
+    const cat = clasificacion.toLowerCase().trim();
 
     switch (cat) {
       case 'facturacion':
@@ -398,18 +404,19 @@ async function procesarGastosStaging(periodo: string, reprocesar: boolean = fals
   // 10. Insertar en gastos_detalle (en lotes de 500)
   const detalles = gastosConClasificacion.map(g => {
     const clasif = String(g.clasificacion || '').toLowerCase().trim();
+    const orig = g.original;
     return {
       gastos_mensuales_id: gastosMensualesId,
       periodo,
-      gerencia: g.gerencia ? String(g.gerencia) : null,
-      sector: g.sector ? String(g.sector) : null,
-      tipogasto: g.tipogasto ? String(g.tipogasto) : null,
-      proveedorgasto: g.proveedorgasto ? String(g.proveedorgasto) : null,
-      comprobante: g.comprobante ? String(g.comprobante) : null,
-      idcomprobante: g.idcomprobante ? String(g.idcomprobante) : null,
-      empresa: g.empresa ? String(g.empresa) : null,
-      empresatipo: g.empresatipo ? String(g.empresatipo) : null,
-      importe_gasto: Number(g.importe_gasto) || 0,
+      gerencia: orig.gerencia ? String(orig.gerencia) : null,
+      sector: orig.sector ? String(orig.sector) : null,
+      tipogasto: orig.tipogasto ? String(orig.tipogasto) : null,
+      proveedorgasto: orig.proveedorgasto ? String(orig.proveedorgasto) : null,
+      comprobante: orig.comprobante ? String(orig.comprobante) : null,
+      idcomprobante: orig.idcomprobante ? String(orig.idcomprobante) : null,
+      empresa: orig.empresa ? String(orig.empresa) : null,
+      empresatipo: orig.empresatipo ? String(orig.empresatipo) : null,
+      importe_gasto: Number(orig.importe_gasto) || 0,
       clasificacion: ['facturacion', 'ocupacion', 'volumen', 'credito', 'rentabilidad', 'movimiento']
         .includes(clasif) ? g.clasificacion : null,
       se_analiza: g.se_analiza,
