@@ -136,12 +136,19 @@ export async function POST(
     let productosEnPerdida = 0;
     let perdidaTotal = 0;
     let beneficioTotal = 0;
+    const erroresInsercion: string[] = [];
+
+    console.log(`Intentando insertar ${analisisData.length} análisis para período ${periodo}`);
 
     for (let i = 0; i < analisisData.length; i += batchSize) {
       const batch = analisisData.slice(i, i + batchSize);
       const { error } = await supabase.from('analisis_producto').insert(batch);
 
-      if (!error) {
+      if (error) {
+        const errorMsg = `Error insertando batch ${i}-${i + batch.length}: ${error.message} (code: ${error.code})`;
+        console.error(errorMsg);
+        erroresInsercion.push(errorMsg);
+      } else {
         insertados += batch.length;
         batch.forEach((a) => {
           if (a.en_perdida) {
@@ -154,6 +161,8 @@ export async function POST(
       }
     }
 
+    console.log(`Análisis insertados: ${insertados}/${analisisData.length}`);
+
     // 7. Refrescar vistas materializadas
     try {
       await supabase.rpc('refresh_materialized_views');
@@ -162,7 +171,7 @@ export async function POST(
     }
 
     return NextResponse.json({
-      success: true,
+      success: erroresInsercion.length === 0,
       periodo,
       productos_analizados: insertados,
       productos_perdida: productosEnPerdida,
@@ -170,13 +179,15 @@ export async function POST(
       perdida_total: perdidaTotal,
       beneficio_total: beneficioTotal,
       resultado_total: beneficioTotal + perdidaTotal,
-      pct_en_perdida: ((productosEnPerdida / insertados) * 100).toFixed(2) + '%',
+      pct_en_perdida: insertados > 0 ? ((productosEnPerdida / insertados) * 100).toFixed(2) + '%' : '0%',
       totales: {
         total_facturacion: totales.total_facturacion,
         total_volumen_m3: totales.total_volumen_m3,
         total_stock_valorizado: totales.total_stock_valorizado,
         total_margen_bruto: totales.total_margen_bruto,
       },
+      metricas_encontradas: metricas.length,
+      errores: erroresInsercion.length > 0 ? erroresInsercion : undefined,
     });
   } catch (error) {
     console.error('Error en cálculo:', error);
