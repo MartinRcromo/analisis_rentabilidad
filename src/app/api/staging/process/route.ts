@@ -76,10 +76,12 @@ async function procesarVentasStaging(periodo: string, reprocesar: boolean = fals
   console.log(`Procesando ${ventasStaging.length} registros de ventas_staging`);
 
   // 3. Extraer valores únicos
-  const subrubros = [...new Set(ventasStaging.map(v => v.subrubro).filter(Boolean))];
-  const proveedores = ventasStaging.filter(v => v.idproveedor).map(v => ({ codigo: v.idproveedor, nombre: v.proveedor }));
-  const compradores = [...new Set(ventasStaging.map(v => v.idcomprador).filter(Boolean))];
-  const categorias = [...new Set(ventasStaging.map(v => v.idcategoria).filter(Boolean))];
+  const subrubros = [...new Set(ventasStaging.map(v => String(v.subrubro || '')).filter(Boolean))];
+  const proveedores: Array<{codigo: string; nombre: string}> = ventasStaging
+    .filter(v => v.idproveedor)
+    .map(v => ({ codigo: String(v.idproveedor), nombre: String(v.proveedor || '') }));
+  const compradores = [...new Set(ventasStaging.map(v => String(v.idcomprador || '')).filter(Boolean))];
+  const categorias = [...new Set(ventasStaging.map(v => String(v.idcategoria || '')).filter(Boolean))];
 
   // 4. Upsert subrubros
   if (subrubros.length > 0) {
@@ -92,9 +94,9 @@ async function procesarVentasStaging(periodo: string, reprocesar: boolean = fals
 
   // 5. Upsert proveedores (eliminar duplicados)
   const proveedoresUnicos = proveedores.reduce((acc, p) => {
-    if (!acc.find((x: { codigo: string; nombre: string }) => x.codigo === p.codigo)) acc.push(p);
+    if (!acc.find(x => x.codigo === p.codigo)) acc.push(p);
     return acc;
-  }, [] as typeof proveedores);
+  }, [] as Array<{codigo: string; nombre: string}>);
 
   if (proveedoresUnicos.length > 0) {
     // Insertar en lotes de 500
@@ -139,20 +141,24 @@ async function procesarVentasStaging(periodo: string, reprocesar: boolean = fals
 
   // 9. Upsert productos (eliminar duplicados)
   type ProductoUnico = {codigo: string; nombre: string; empresa: string; subrubro_id: number | null; proveedor_id: number | null; comprador_id: number | null; categoria_id: number | null};
-  const productosUnicos = ventasStaging.reduce((acc, v) => {
-    if (v.idproducto && !acc.find((x: ProductoUnico) => x.codigo === v.idproducto)) {
-      acc.push({
-        codigo: v.idproducto,
-        nombre: v.producto,
-        empresa: v.empresa,
-        subrubro_id: subrubroMap.get(v.subrubro) || null,
-        proveedor_id: proveedorMap.get(v.idproveedor) || null,
-        comprador_id: compradorMap.get(v.idcomprador) || null,
-        categoria_id: categoriaMap.get(v.idcategoria) || null,
+  const productosUnicos: ProductoUnico[] = [];
+  const codigosVistos = new Set<string>();
+
+  for (const v of ventasStaging) {
+    const codigo = String(v.idproducto || '');
+    if (codigo && !codigosVistos.has(codigo)) {
+      codigosVistos.add(codigo);
+      productosUnicos.push({
+        codigo,
+        nombre: String(v.producto || ''),
+        empresa: String(v.empresa || ''),
+        subrubro_id: subrubroMap.get(String(v.subrubro || '')) || null,
+        proveedor_id: proveedorMap.get(String(v.idproveedor || '')) || null,
+        comprador_id: compradorMap.get(String(v.idcomprador || '')) || null,
+        categoria_id: categoriaMap.get(String(v.idcategoria || '')) || null,
       });
     }
-    return acc;
-  }, [] as ProductoUnico[]);
+  }
 
   if (productosUnicos.length > 0) {
     // Insertar en lotes de 500
@@ -179,20 +185,24 @@ async function procesarVentasStaging(periodo: string, reprocesar: boolean = fals
 
   // 12. Insertar métricas (en lotes de 500)
   const metricas = ventasStaging
-    .filter(v => v.idproducto && productoMap.has(v.idproducto))
-    .map(v => ({
-      producto_id: productoMap.get(v.idproducto),
-      periodo,
-      importe_ventas: v.importe_ventas || 0,
-      importe_costo: v.importe_costo || 0,
-      margen_bruto: (v.importe_ventas || 0) - (v.importe_costo || 0),
-      markup_pct: v.importe_costo > 0 ? ((v.importe_ventas / v.importe_costo) - 1) * 100 : 0,
-      stock_unidades: v.stock_unidades || 0,
-      stock_costo: v.stock_costo || 0,
-      stock_volumen: v.stock_volumen || 0,
-      unidades_vendidas: v.unidades_vendidas || 0,
-      veces_pedido: v.veces_pedido || 1,
-    }));
+    .filter(v => v.idproducto && productoMap.has(String(v.idproducto)))
+    .map(v => {
+      const importeVentas = Number(v.importe_ventas) || 0;
+      const importeCosto = Number(v.importe_costo) || 0;
+      return {
+        producto_id: productoMap.get(String(v.idproducto)),
+        periodo,
+        importe_ventas: importeVentas,
+        importe_costo: importeCosto,
+        margen_bruto: importeVentas - importeCosto,
+        markup_pct: importeCosto > 0 ? ((importeVentas / importeCosto) - 1) * 100 : 0,
+        stock_unidades: Number(v.stock_unidades) || 0,
+        stock_costo: Number(v.stock_costo) || 0,
+        stock_volumen: Number(v.stock_volumen) || 0,
+        unidades_vendidas: Number(v.unidades_vendidas) || 0,
+        veces_pedido: Number(v.veces_pedido) || 1,
+      };
+    });
 
   console.log(`Métricas a insertar: ${metricas.length}`);
 
