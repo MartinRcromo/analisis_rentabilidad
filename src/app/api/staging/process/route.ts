@@ -285,33 +285,107 @@ async function procesarVentasStaging(periodo: string, reprocesar: boolean = fals
     results.errores_detallados.push(`${sinMapeo.length} registros sin mapeo de producto. Ejemplos: ${ejemplos.join(', ')}`);
   }
 
-  const metricas = ventasStaging
-    .filter(v => v.idproducto && productoMap.has(String(v.idproducto)))
-    .map(v => {
-      const importeVentas = Number(v.importe_ventas) || 0;
-      const importeCosto = Number(v.importe_costo) || 0;
-      return {
-        producto_id: productoMap.get(String(v.idproducto)),
+  // Agrupar métricas por producto_id para evitar duplicados (unique constraint)
+  const metricasMap = new Map<number, {
+    producto_id: number;
+    periodo: string;
+    importe_ventas: number;
+    importe_costo: number;
+    stock_unidades: number;
+    stock_costo: number;
+    stock_volumen: number;
+    unidades_vendidas: number;
+    veces_pedido: number;
+  }>();
+
+  for (const v of ventasStaging) {
+    if (!v.idproducto || !productoMap.has(String(v.idproducto))) continue;
+
+    const productoId = productoMap.get(String(v.idproducto)) as number;
+    const importeVentas = Number(v.importe_ventas) || 0;
+    const importeCosto = Number(v.importe_costo) || 0;
+
+    const existing = metricasMap.get(productoId);
+    if (existing) {
+      // Sumar valores al registro existente
+      existing.importe_ventas += importeVentas;
+      existing.importe_costo += importeCosto;
+      existing.stock_unidades += Number(v.stock_unidades) || 0;
+      existing.stock_costo += Number(v.stock_costo) || 0;
+      existing.stock_volumen += Number(v.stock_volumen) || 0;
+      existing.unidades_vendidas += Number(v.unidades_vendidas) || 0;
+      existing.veces_pedido += Number(v.veces_pedido) || 1;
+    } else {
+      // Crear nuevo registro
+      metricasMap.set(productoId, {
+        producto_id: productoId,
         periodo,
         importe_ventas: importeVentas,
         importe_costo: importeCosto,
-        margen_bruto: importeVentas - importeCosto,
-        markup_pct: importeCosto > 0 ? ((importeVentas / importeCosto) - 1) * 100 : 0,
         stock_unidades: Number(v.stock_unidades) || 0,
         stock_costo: Number(v.stock_costo) || 0,
         stock_volumen: Number(v.stock_volumen) || 0,
         unidades_vendidas: Number(v.unidades_vendidas) || 0,
         veces_pedido: Number(v.veces_pedido) || 1,
-      };
-    });
+      });
+    }
+  }
 
-  console.log(`Métricas a insertar: ${metricas.length}`);
+  // Convertir a array y calcular campos derivados
+  const metricas = Array.from(metricasMap.values()).map(m => ({
+    ...m,
+    margen_bruto: m.importe_ventas - m.importe_costo,
+    markup_pct: m.importe_costo > 0 ? ((m.importe_ventas / m.importe_costo) - 1) * 100 : 0,
+  }));
+
+  console.log(`Métricas a insertar/actualizar: ${metricas.length}`);
   results.paso_actual = `Insertando ${metricas.length} métricas`;
 
   if (metricas.length > 0) {
-    for (let i = 0; i < metricas.length; i += 500) {
-      const batch = metricas.slice(i, i + 500);
-      const { error, data } = await db.from('metricas_producto').insert(batch).select('id');
+    // Obtener producto_ids para buscar métricas existentes
+    const productoIds = metricas.map(m => m.producto_id);
+
+    // Buscar métricas existentes del período para estos productos (en lotes anteriores)
+    const { data: metricasExistentes } = await db
+      .from('metricas_producto')
+      .select('*')
+      .eq('periodo', periodo)
+      .in('producto_id', productoIds);
+
+    const existentesMap = new Map(
+      metricasExistentes?.map(m => [m.producto_id, m]) || []
+    );
+
+    // Preparar métricas para upsert (sumando valores si ya existen)
+    const metricasParaUpsert = metricas.map(m => {
+      const existente = existentesMap.get(m.producto_id);
+      if (existente) {
+        // Sumar valores a los existentes
+        const importeVentas = m.importe_ventas + (Number(existente.importe_ventas) || 0);
+        const importeCosto = m.importe_costo + (Number(existente.importe_costo) || 0);
+        return {
+          producto_id: m.producto_id,
+          periodo: m.periodo,
+          importe_ventas: importeVentas,
+          importe_costo: importeCosto,
+          margen_bruto: importeVentas - importeCosto,
+          markup_pct: importeCosto > 0 ? ((importeVentas / importeCosto) - 1) * 100 : 0,
+          stock_unidades: m.stock_unidades + (Number(existente.stock_unidades) || 0),
+          stock_costo: m.stock_costo + (Number(existente.stock_costo) || 0),
+          stock_volumen: m.stock_volumen + (Number(existente.stock_volumen) || 0),
+          unidades_vendidas: m.unidades_vendidas + (Number(existente.unidades_vendidas) || 0),
+          veces_pedido: m.veces_pedido + (Number(existente.veces_pedido) || 0),
+        };
+      }
+      return m;
+    });
+
+    for (let i = 0; i < metricasParaUpsert.length; i += 500) {
+      const batch = metricasParaUpsert.slice(i, i + 500);
+      const { error, data } = await db
+        .from('metricas_producto')
+        .upsert(batch, { onConflict: 'producto_id,periodo' })
+        .select('id');
       if (error) {
         const errorMsg = `Error insertando métricas batch ${i}-${i+batch.length}: ${error.message} (code: ${error.code}, details: ${error.details || 'none'}, hint: ${error.hint || 'none'})`;
         console.error(errorMsg);
@@ -321,7 +395,10 @@ async function procesarVentasStaging(periodo: string, reprocesar: boolean = fals
         // Intentar identificar el registro problemático
         if (batch.length <= 10) {
           for (let j = 0; j < batch.length; j++) {
-            const singleResult = await db.from('metricas_producto').insert(batch[j]).select('id');
+            const singleResult = await db
+              .from('metricas_producto')
+              .upsert(batch[j], { onConflict: 'producto_id,periodo' })
+              .select('id');
             if (singleResult.error) {
               results.errores_detallados.push(`  -> Registro ${i+j} falló: producto_id=${batch[j].producto_id}, error=${singleResult.error.message}`);
             } else {
