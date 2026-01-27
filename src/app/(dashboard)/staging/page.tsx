@@ -73,6 +73,49 @@ export default function StagingPage() {
   const [calculateResult, setCalculateResult] = useState<CalculateResult | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  // Función para parsear el período en diferentes formatos
+  const parsePeriodo = (input: string): string | null => {
+    // Si ya está en formato YYYY-MM, retornar directamente
+    if (/^\d{4}-\d{2}$/.test(input)) {
+      return input;
+    }
+
+    // Intentar parsear formatos localizados (ej: "diciembre de 2025", "December 2025")
+    const mesesES: Record<string, string> = {
+      'enero': '01', 'febrero': '02', 'marzo': '03', 'abril': '04',
+      'mayo': '05', 'junio': '06', 'julio': '07', 'agosto': '08',
+      'septiembre': '09', 'octubre': '10', 'noviembre': '11', 'diciembre': '12'
+    };
+    const mesesEN: Record<string, string> = {
+      'january': '01', 'february': '02', 'march': '03', 'april': '04',
+      'may': '05', 'june': '06', 'july': '07', 'august': '08',
+      'september': '09', 'october': '10', 'november': '11', 'december': '12'
+    };
+
+    const normalized = input.toLowerCase().trim();
+
+    // Buscar año (4 dígitos)
+    const yearMatch = normalized.match(/\d{4}/);
+    if (!yearMatch) return null;
+    const year = yearMatch[0];
+
+    // Buscar mes en español
+    for (const [mes, num] of Object.entries(mesesES)) {
+      if (normalized.includes(mes)) {
+        return `${year}-${num}`;
+      }
+    }
+
+    // Buscar mes en inglés
+    for (const [mes, num] of Object.entries(mesesEN)) {
+      if (normalized.includes(mes)) {
+        return `${year}-${num}`;
+      }
+    }
+
+    return null;
+  };
+
   const checkStatus = async () => {
     setCheckingStatus(true);
     setError(null);
@@ -105,11 +148,17 @@ export default function StagingPage() {
       return;
     }
 
+    const parsedPeriodo = parsePeriodo(periodo);
+    if (!parsedPeriodo) {
+      setError('Formato de período inválido. Use el selector de mes o ingrese en formato AAAA-MM (ej: 2025-12)');
+      return;
+    }
+
     setLoading(true);
     setError(null);
     setResult(null);
 
-    const formattedPeriodo = `${periodo}-01`;
+    const formattedPeriodo = `${parsedPeriodo}-01`;
 
     try {
       const response = await fetch('/api/staging/process', {
