@@ -35,6 +35,7 @@ interface ProcessResult {
       metricas_fallidas?: number;
       productos_sin_mapeo?: number;
       registros_leidos?: number;
+      registros_pendientes?: number;
       mensaje?: string;
       paso_actual?: string;
       errores_detallados?: string[];
@@ -61,6 +62,16 @@ interface ProcessResult {
     ventas_metricas_fallidas?: number;
     ventas_productos_sin_mapeo?: number;
   };
+  hay_mas_pendientes?: boolean;
+  registros_pendientes?: number;
+}
+
+interface BatchProgress {
+  lote_actual: number;
+  registros_procesados: number;
+  registros_totales: number;
+  metricas_totales: number;
+  en_progreso: boolean;
 }
 
 interface CalculateResult {
@@ -81,6 +92,7 @@ export default function StagingPage() {
   const [result, setResult] = useState<ProcessResult | null>(null);
   const [calculateResult, setCalculateResult] = useState<CalculateResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [batchProgress, setBatchProgress] = useState<BatchProgress | null>(null);
 
   // Función para parsear el período en diferentes formatos
   const parsePeriodo = (input: string): string | null => {
@@ -166,30 +178,107 @@ export default function StagingPage() {
     setLoading(true);
     setError(null);
     setResult(null);
+    setBatchProgress({
+      lote_actual: 0,
+      registros_procesados: 0,
+      registros_totales: stagingStatus?.find(s => s.tabla === 'ventas_staging')?.total_registros || 0,
+      metricas_totales: 0,
+      en_progreso: true,
+    });
 
     const formattedPeriodo = `${parsedPeriodo}-01`;
+    let loteActual = 0;
+    let totalProcesados = 0;
+    let totalMetricas = 0;
+    let hayMasPendientes = true;
+    let ultimoResultado: ProcessResult | null = null;
+    let esReprocesar = reprocesar;
 
     try {
-      const response = await fetch('/api/staging/process', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ periodo: formattedPeriodo, reprocesar }),
-      });
+      // Procesar en lotes hasta que no haya más pendientes
+      while (hayMasPendientes) {
+        loteActual++;
 
-      const data = await response.json();
-      setResult(data);
+        setBatchProgress(prev => prev ? {
+          ...prev,
+          lote_actual: loteActual,
+          en_progreso: true,
+        } : null);
 
-      if (!data.success && data.errors) {
-        setError(data.errors.join('\n'));
+        const response = await fetch('/api/staging/process', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            periodo: formattedPeriodo,
+            reprocesar: esReprocesar // Solo reprocesar en el primer lote
+          }),
+        });
+
+        // Después del primer lote, ya no reprocesamos
+        esReprocesar = false;
+
+        const text = await response.text();
+
+        // Verificar si la respuesta es JSON válido
+        let data: ProcessResult;
+        try {
+          data = JSON.parse(text);
+        } catch {
+          // Si no es JSON, probablemente es un error de timeout
+          throw new Error(`Timeout o error del servidor. Respuesta: ${text.substring(0, 200)}`);
+        }
+
+        ultimoResultado = data;
+
+        // Acumular resultados
+        const registrosLote = data.resultados?.ventas?.registros_leidos || 0;
+        const metricasLote = data.resultados?.ventas?.metricas_insertadas || 0;
+        totalProcesados += registrosLote;
+        totalMetricas += metricasLote;
+
+        setBatchProgress(prev => prev ? {
+          ...prev,
+          registros_procesados: totalProcesados,
+          metricas_totales: totalMetricas,
+        } : null);
+
+        // Verificar si hay más pendientes
+        hayMasPendientes = data.hay_mas_pendientes === true && (data.registros_pendientes || 0) > 0;
+
+        // Si hubo errores graves, detener
+        if (data.errors && data.errors.length > 0) {
+          // Mostrar errores pero continuar si hay más pendientes
+          console.warn('Errores en lote:', data.errors);
+        }
+
+        // Pequeña pausa entre lotes para no saturar
+        if (hayMasPendientes) {
+          await new Promise(resolve => setTimeout(resolve, 500));
+        }
+      }
+
+      // Actualizar resultado final
+      if (ultimoResultado) {
+        // Modificar para mostrar totales acumulados
+        if (ultimoResultado.resultados?.ventas) {
+          ultimoResultado.resultados.ventas.registros_leidos = totalProcesados;
+          ultimoResultado.resultados.ventas.metricas_insertadas = totalMetricas;
+        }
+        setResult(ultimoResultado);
+
+        if (!ultimoResultado.success && ultimoResultado.errors) {
+          setError(ultimoResultado.errors.join('\n'));
+        }
       }
 
       // Actualizar status después de procesar
       await checkStatus();
 
     } catch (err) {
-      setError(`Error procesando: ${err}`);
+      setError(`Error procesando lote ${loteActual}: ${err}`);
     } finally {
       setLoading(false);
+      setBatchProgress(prev => prev ? { ...prev, en_progreso: false } : null);
     }
   };
 
@@ -372,6 +461,50 @@ export default function StagingPage() {
             </div>
           </CardContent>
         </Card>
+
+        {/* Progreso por lotes */}
+        {batchProgress && batchProgress.en_progreso && (
+          <Card className="mb-6 border-blue-200 bg-blue-50">
+            <CardHeader>
+              <div className="flex items-center gap-2">
+                <Loader2 className="h-6 w-6 text-blue-500 animate-spin" />
+                <CardTitle className="text-blue-800">Procesando por lotes...</CardTitle>
+              </div>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-4">
+                <div className="flex justify-between text-sm">
+                  <span>Lote actual:</span>
+                  <span className="font-bold text-blue-700">{batchProgress.lote_actual}</span>
+                </div>
+                <div className="flex justify-between text-sm">
+                  <span>Registros procesados:</span>
+                  <span className="font-bold text-blue-700">
+                    {batchProgress.registros_procesados.toLocaleString()} / {batchProgress.registros_totales.toLocaleString()}
+                  </span>
+                </div>
+                <div className="flex justify-between text-sm">
+                  <span>Métricas insertadas:</span>
+                  <span className="font-bold text-green-600">{batchProgress.metricas_totales.toLocaleString()}</span>
+                </div>
+                {/* Barra de progreso */}
+                <div className="w-full bg-blue-200 rounded-full h-4">
+                  <div
+                    className="bg-blue-600 h-4 rounded-full transition-all duration-500"
+                    style={{
+                      width: `${batchProgress.registros_totales > 0
+                        ? Math.min((batchProgress.registros_procesados / batchProgress.registros_totales) * 100, 100)
+                        : 0}%`
+                    }}
+                  />
+                </div>
+                <p className="text-xs text-blue-600 text-center">
+                  Procesando en lotes de 2000 registros para evitar timeout...
+                </p>
+              </div>
+            </CardContent>
+          </Card>
+        )}
 
         {/* Error */}
         {error && (

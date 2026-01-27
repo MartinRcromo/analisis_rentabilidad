@@ -19,7 +19,33 @@ function getSupabase(): SupabaseClient {
 }
 
 // =============================================================================
-// HELPER: Obtener todos los registros con paginación
+// CONSTANTES
+// =============================================================================
+const BATCH_LIMIT = 2000; // Máximo registros por llamada para evitar timeout
+
+// =============================================================================
+// HELPER: Obtener registros con límite (para procesamiento por lotes)
+// =============================================================================
+async function fetchRecordsWithLimit(table: string, limit: number, filter?: { column: string; value: boolean }) {
+  const db = getSupabase();
+  let query = db
+    .from(table)
+    .select('*')
+    .limit(limit);
+
+  if (filter) {
+    query = query.eq(filter.column, filter.value);
+  }
+
+  const { data, error } = await query;
+
+  if (error) throw new Error(`Error leyendo ${table}: ${error.message}`);
+
+  return data || [];
+}
+
+// =============================================================================
+// HELPER: Obtener todos los registros con paginación (para tablas maestras)
 // =============================================================================
 async function fetchAllRecords(table: string, filter?: { column: string; value: boolean }) {
   const PAGE_SIZE = 1000;
@@ -55,7 +81,7 @@ async function fetchAllRecords(table: string, filter?: { column: string; value: 
 }
 
 // =============================================================================
-// PROCESAR VENTAS STAGING (TypeScript directo)
+// PROCESAR VENTAS STAGING (TypeScript directo) - CON SOPORTE PARA LOTES
 // =============================================================================
 async function procesarVentasStaging(periodo: string, reprocesar: boolean = false) {
   const db = getSupabase();
@@ -72,20 +98,34 @@ async function procesarVentasStaging(periodo: string, reprocesar: boolean = fals
     paso_actual: '',
     metricas_fallidas: 0,
     productos_sin_mapeo: 0,
+    // Info de lotes
+    registros_pendientes: 0,
+    lote_completado: false,
   };
 
-  // 1. Si reprocesar, primero resetear el estado
+  // 1. Si reprocesar, primero resetear el estado y eliminar métricas anteriores
   if (reprocesar) {
+    results.paso_actual = 'Reseteando registros...';
     await db
       .from('ventas_staging')
       .update({ procesado: false })
       .eq('procesado', true);
-    console.log('Registros de ventas_staging reseteados');
+    // Eliminar métricas anteriores del período
+    await db.from('metricas_producto').delete().eq('periodo', periodo);
+    console.log('Registros de ventas_staging reseteados y métricas eliminadas');
   }
 
-  // 2. Obtener TODOS los datos de staging pendientes (con paginación)
-  console.log('Obteniendo registros de ventas_staging...');
-  const ventasStaging = await fetchAllRecords('ventas_staging', { column: 'procesado', value: false });
+  // 2. Obtener UN LOTE de datos de staging pendientes (máximo BATCH_LIMIT)
+  console.log(`Obteniendo hasta ${BATCH_LIMIT} registros de ventas_staging...`);
+  const ventasStaging = await fetchRecordsWithLimit('ventas_staging', BATCH_LIMIT, { column: 'procesado', value: false });
+
+  // Contar pendientes totales para informar progreso
+  const { count: totalPendientes } = await db
+    .from('ventas_staging')
+    .select('*', { count: 'exact', head: true })
+    .eq('procesado', false);
+
+  results.registros_pendientes = (totalPendientes || 0) - ventasStaging.length;
 
   if (!ventasStaging || ventasStaging.length === 0) {
     return { ...results, mensaje: 'No hay ventas pendientes de procesar' };
@@ -230,8 +270,9 @@ async function procesarVentasStaging(periodo: string, reprocesar: boolean = fals
 
   console.log(`Productos en BD: ${productoMap.size}`);
 
-  // 11. Eliminar métricas anteriores del período
-  await db.from('metricas_producto').delete().eq('periodo', periodo);
+  // 11. Ya NO eliminamos métricas aquí (se hace solo en reprocesar)
+  // Solo eliminamos si NO es reprocesar y es el primer lote
+  // await db.from('metricas_producto').delete().eq('periodo', periodo);
 
   // 12. Insertar métricas (en lotes de 500)
   results.paso_actual = 'Preparando métricas';
@@ -315,7 +356,8 @@ async function procesarVentasStaging(periodo: string, reprocesar: boolean = fals
   }
 
   results.paso_actual = 'Completado';
-  console.log(`Ventas marcadas como procesadas: ${marcadosExitosos}/${ids.length}`);
+  results.lote_completado = results.registros_pendientes === 0;
+  console.log(`Ventas marcadas como procesadas: ${marcadosExitosos}/${ids.length}. Pendientes: ${results.registros_pendientes}`);
 
   return results;
 }
@@ -609,6 +651,10 @@ export async function POST(request: NextRequest) {
     const gastosErrores = (results.gastos as Record<string, unknown>)?.errores_detallados as string[] || [];
     const todosLosErrores = [...results.errors, ...ventasErrores, ...gastosErrores];
 
+    // Determinar si hay más registros pendientes
+    const ventasPendientes = (results.ventas as Record<string, unknown>)?.registros_pendientes as number || 0;
+    const hayMasPendientes = ventasPendientes > 0;
+
     return NextResponse.json({
       success: results.errors.length === 0 && ventasErrores.length === 0 && gastosErrores.length === 0,
       periodo,
@@ -625,7 +671,10 @@ export async function POST(request: NextRequest) {
         ventas_paso: (results.ventas as Record<string, unknown>)?.paso_actual || 'no iniciado',
         ventas_metricas_fallidas: (results.ventas as Record<string, unknown>)?.metricas_fallidas || 0,
         ventas_productos_sin_mapeo: (results.ventas as Record<string, unknown>)?.productos_sin_mapeo || 0,
-      }
+      },
+      // Info para procesamiento por lotes
+      hay_mas_pendientes: hayMasPendientes,
+      registros_pendientes: ventasPendientes,
     });
 
   } catch (error) {
