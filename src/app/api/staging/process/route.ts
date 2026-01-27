@@ -6,6 +6,356 @@ const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PU
 
 const supabase = createClient(supabaseUrl, supabaseKey);
 
+// =============================================================================
+// PROCESAR VENTAS STAGING (TypeScript directo)
+// =============================================================================
+async function procesarVentasStaging(periodo: string) {
+  const results = {
+    subrubros_procesados: 0,
+    proveedores_procesados: 0,
+    compradores_procesados: 0,
+    categorias_procesadas: 0,
+    productos_procesados: 0,
+    metricas_insertadas: 0,
+  };
+
+  // 1. Obtener datos de staging pendientes
+  const { data: ventasStaging, error: errorStaging } = await supabase
+    .from('ventas_staging')
+    .select('*')
+    .eq('procesado', false);
+
+  if (errorStaging) throw new Error(`Error leyendo ventas_staging: ${errorStaging.message}`);
+  if (!ventasStaging || ventasStaging.length === 0) {
+    return { ...results, mensaje: 'No hay ventas pendientes de procesar' };
+  }
+
+  console.log(`Procesando ${ventasStaging.length} registros de ventas_staging`);
+
+  // 2. Extraer valores únicos
+  const subrubros = [...new Set(ventasStaging.map(v => v.subrubro).filter(Boolean))];
+  const proveedores = [...new Set(ventasStaging.filter(v => v.idproveedor).map(v => ({ codigo: v.idproveedor, nombre: v.proveedor })))];
+  const compradores = [...new Set(ventasStaging.map(v => v.idcomprador).filter(Boolean))];
+  const categorias = [...new Set(ventasStaging.map(v => v.idcategoria).filter(Boolean))];
+
+  // 3. Upsert subrubros
+  if (subrubros.length > 0) {
+    const { error } = await supabase
+      .from('subrubros')
+      .upsert(subrubros.map(nombre => ({ nombre })), { onConflict: 'nombre' });
+    if (error) console.error('Error upsert subrubros:', error);
+    else results.subrubros_procesados = subrubros.length;
+  }
+
+  // 4. Upsert proveedores
+  const proveedoresUnicos = proveedores.reduce((acc, p) => {
+    if (!acc.find(x => x.codigo === p.codigo)) acc.push(p);
+    return acc;
+  }, [] as typeof proveedores);
+
+  if (proveedoresUnicos.length > 0) {
+    const { error } = await supabase
+      .from('proveedores')
+      .upsert(proveedoresUnicos, { onConflict: 'codigo' });
+    if (error) console.error('Error upsert proveedores:', error);
+    else results.proveedores_procesados = proveedoresUnicos.length;
+  }
+
+  // 5. Upsert compradores
+  if (compradores.length > 0) {
+    const { error } = await supabase
+      .from('compradores')
+      .upsert(compradores.map(codigo => ({ codigo })), { onConflict: 'codigo' });
+    if (error) console.error('Error upsert compradores:', error);
+    else results.compradores_procesados = compradores.length;
+  }
+
+  // 6. Upsert categorías
+  if (categorias.length > 0) {
+    const { error } = await supabase
+      .from('categorias')
+      .upsert(categorias.map(codigo => ({ codigo })), { onConflict: 'codigo' });
+    if (error) console.error('Error upsert categorías:', error);
+    else results.categorias_procesadas = categorias.length;
+  }
+
+  // 7. Obtener IDs de tablas maestras
+  const { data: subrubrosDb } = await supabase.from('subrubros').select('id, nombre');
+  const { data: proveedoresDb } = await supabase.from('proveedores').select('id, codigo');
+  const { data: compradoresDb } = await supabase.from('compradores').select('id, codigo');
+  const { data: categoriasDb } = await supabase.from('categorias').select('id, codigo');
+
+  const subrubroMap = new Map(subrubrosDb?.map(s => [s.nombre, s.id]) || []);
+  const proveedorMap = new Map(proveedoresDb?.map(p => [p.codigo, p.id]) || []);
+  const compradorMap = new Map(compradoresDb?.map(c => [c.codigo, c.id]) || []);
+  const categoriaMap = new Map(categoriasDb?.map(c => [c.codigo, c.id]) || []);
+
+  // 8. Upsert productos
+  const productosUnicos = ventasStaging.reduce((acc, v) => {
+    if (v.idproducto && !acc.find(x => x.codigo === v.idproducto)) {
+      acc.push({
+        codigo: v.idproducto,
+        nombre: v.producto,
+        empresa: v.empresa,
+        subrubro_id: subrubroMap.get(v.subrubro) || null,
+        proveedor_id: proveedorMap.get(v.idproveedor) || null,
+        comprador_id: compradorMap.get(v.idcomprador) || null,
+        categoria_id: categoriaMap.get(v.idcategoria) || null,
+      });
+    }
+    return acc;
+  }, [] as Array<{codigo: string; nombre: string; empresa: string; subrubro_id: number | null; proveedor_id: number | null; comprador_id: number | null; categoria_id: number | null}>);
+
+  if (productosUnicos.length > 0) {
+    const { error } = await supabase
+      .from('productos')
+      .upsert(productosUnicos, { onConflict: 'codigo' });
+    if (error) console.error('Error upsert productos:', error);
+    else results.productos_procesados = productosUnicos.length;
+  }
+
+  // 9. Obtener IDs de productos
+  const { data: productosDb } = await supabase.from('productos').select('id, codigo');
+  const productoMap = new Map(productosDb?.map(p => [p.codigo, p.id]) || []);
+
+  // 10. Eliminar métricas anteriores del período
+  await supabase.from('metricas_producto').delete().eq('periodo', periodo);
+
+  // 11. Insertar métricas
+  const metricas = ventasStaging
+    .filter(v => v.idproducto && productoMap.has(v.idproducto))
+    .map(v => ({
+      producto_id: productoMap.get(v.idproducto),
+      periodo,
+      importe_ventas: v.importe_ventas || 0,
+      importe_costo: v.importe_costo || 0,
+      margen_bruto: (v.importe_ventas || 0) - (v.importe_costo || 0),
+      markup_pct: v.importe_costo > 0 ? ((v.importe_ventas / v.importe_costo) - 1) * 100 : 0,
+      stock_unidades: v.stock_unidades || 0,
+      stock_costo: v.stock_costo || 0,
+      stock_volumen: v.stock_volumen || 0,
+      unidades_vendidas: v.unidades_vendidas || 0,
+      veces_pedido: v.veces_pedido || 1,
+    }));
+
+  if (metricas.length > 0) {
+    // Insertar en lotes de 500
+    for (let i = 0; i < metricas.length; i += 500) {
+      const batch = metricas.slice(i, i + 500);
+      const { error } = await supabase.from('metricas_producto').insert(batch);
+      if (error) console.error(`Error insertando métricas batch ${i}:`, error);
+      else results.metricas_insertadas += batch.length;
+    }
+  }
+
+  // 12. Marcar como procesados
+  await supabase
+    .from('ventas_staging')
+    .update({ procesado: true })
+    .eq('procesado', false);
+
+  return results;
+}
+
+// =============================================================================
+// PROCESAR GASTOS STAGING (TypeScript directo)
+// =============================================================================
+async function procesarGastosStaging(periodo: string) {
+  const results = {
+    gastos_detalle_insertados: 0,
+    total_facturacion: 0,
+    total_ocupacion: 0,
+    total_movimiento: 0,
+    total_credito: 0,
+    total_rentabilidad: 0,
+    total_sin_clasificar: 0,
+    total_general: 0,
+  };
+
+  // 1. Obtener datos de staging pendientes
+  const { data: gastosStaging, error: errorStaging } = await supabase
+    .from('gastos_staging')
+    .select('*')
+    .eq('procesado', false);
+
+  if (errorStaging) throw new Error(`Error leyendo gastos_staging: ${errorStaging.message}`);
+  if (!gastosStaging || gastosStaging.length === 0) {
+    return { ...results, mensaje: 'No hay gastos pendientes de procesar' };
+  }
+
+  console.log(`Procesando ${gastosStaging.length} registros de gastos_staging`);
+
+  // 2. Obtener clasificaciones maestras
+  const { data: clasificacionesMaestras } = await supabase
+    .from('gastos_clasificacion_maestra')
+    .select('*');
+
+  const clasificacionMap = new Map(
+    clasificacionesMaestras?.map(c => [
+      `${c.sector?.toLowerCase().trim()}|${c.tipogasto?.toLowerCase().trim()}`,
+      { clasificacion: c.clasificacion, se_analiza: c.se_analiza }
+    ]) || []
+  );
+
+  // 3. Aplicar clasificación a cada gasto
+  const gastosConClasificacion = gastosStaging.map(g => {
+    let clasificacion = g.clasificacion;
+    let seAnaliza = g.se_analiza ?? true;
+
+    // Si no tiene clasificación, buscar en maestra
+    if (!clasificacion || clasificacion.trim() === '') {
+      const key = `${g.sector?.toLowerCase().trim()}|${g.tipogasto?.toLowerCase().trim()}`;
+      const maestra = clasificacionMap.get(key);
+      if (maestra) {
+        clasificacion = maestra.clasificacion;
+        seAnaliza = maestra.se_analiza;
+      }
+    }
+
+    return { ...g, clasificacion, se_analiza: seAnaliza };
+  });
+
+  // 4. Calcular totales por categoría
+  let cat1_facturacion = 0;
+  let cat2_ocupacion = 0;
+  let cat3_credito = 0;
+  let cat4_rentabilidad = 0;
+  let cat5_movimiento = 0;
+  let sin_clasificar = 0;
+
+  for (const g of gastosConClasificacion) {
+    const importe = g.importe_gasto || 0;
+    const cat = g.clasificacion?.toLowerCase().trim();
+
+    switch (cat) {
+      case 'facturacion':
+        cat1_facturacion += importe;
+        break;
+      case 'ocupacion':
+      case 'volumen':
+        cat2_ocupacion += importe;
+        break;
+      case 'credito':
+        cat3_credito += importe;
+        break;
+      case 'rentabilidad':
+        cat4_rentabilidad += importe;
+        break;
+      case 'movimiento':
+        cat5_movimiento += importe;
+        break;
+      default:
+        sin_clasificar += importe;
+    }
+  }
+
+  const total_clasificado = cat1_facturacion + cat2_ocupacion + cat3_credito + cat4_rentabilidad + cat5_movimiento;
+  const total_general = total_clasificado + sin_clasificar;
+
+  // 5. Calcular pesos (porcentajes)
+  const peso_facturacion = total_clasificado > 0 ? cat1_facturacion / total_clasificado : 0;
+  const peso_ocupacion = total_clasificado > 0 ? cat2_ocupacion / total_clasificado : 0;
+  const peso_credito = total_clasificado > 0 ? cat3_credito / total_clasificado : 0;
+  const peso_rentabilidad = total_clasificado > 0 ? cat4_rentabilidad / total_clasificado : 0;
+  const peso_movimiento = total_clasificado > 0 ? cat5_movimiento / total_clasificado : 0;
+
+  // 6. Calcular finales (distribuir sin_clasificar proporcionalmente)
+  const final_facturacion = cat1_facturacion + (peso_facturacion * sin_clasificar);
+  const final_ocupacion = cat2_ocupacion + (peso_ocupacion * sin_clasificar);
+  const final_credito = cat3_credito + (peso_credito * sin_clasificar);
+  const final_rentabilidad = cat4_rentabilidad + (peso_rentabilidad * sin_clasificar);
+  const final_movimiento = cat5_movimiento + (peso_movimiento * sin_clasificar);
+
+  console.log('Distribución gastos:', {
+    facturacion: final_facturacion,
+    ocupacion: final_ocupacion,
+    movimiento: final_movimiento,
+    credito: final_credito,
+    rentabilidad: final_rentabilidad,
+    sin_clasificar,
+    total_general
+  });
+
+  // 7. Eliminar datos anteriores del período
+  await supabase.from('gastos_detalle').delete().eq('periodo', periodo);
+  await supabase.from('gastos_mensuales').delete().eq('periodo', periodo);
+
+  // 8. Insertar en gastos_mensuales
+  const { data: gastosMensuales, error: errorMensual } = await supabase
+    .from('gastos_mensuales')
+    .insert({
+      periodo,
+      cat1_facturacion_base: cat1_facturacion,
+      cat2_volumen_base: cat2_ocupacion,
+      cat3_credito_base: cat3_credito,
+      cat4_rentabilidad_base: cat4_rentabilidad,
+      cat5_movimiento_base: cat5_movimiento,
+      total_clasificado,
+      total_sin_clasificar: sin_clasificar,
+      total_general,
+      peso_facturacion,
+      peso_volumen: peso_ocupacion,
+      peso_credito,
+      peso_rentabilidad,
+      peso_movimiento,
+      cat1_facturacion_final: final_facturacion,
+      cat2_volumen_final: final_ocupacion,
+      cat3_credito_final: final_credito,
+      cat4_rentabilidad_final: final_rentabilidad,
+      cat5_movimiento_final: final_movimiento,
+    })
+    .select()
+    .single();
+
+  if (errorMensual) throw new Error(`Error insertando gastos_mensuales: ${errorMensual.message}`);
+
+  const gastosMensualesId = gastosMensuales.id;
+
+  // 9. Insertar en gastos_detalle (en lotes de 500)
+  const detalles = gastosConClasificacion.map(g => ({
+    gastos_mensuales_id: gastosMensualesId,
+    periodo,
+    gerencia: g.gerencia,
+    sector: g.sector,
+    tipogasto: g.tipogasto,
+    proveedorgasto: g.proveedorgasto,
+    comprobante: g.comprobante,
+    idcomprobante: g.idcomprobante,
+    empresa: g.empresa,
+    empresatipo: g.empresatipo,
+    importe_gasto: g.importe_gasto,
+    clasificacion: ['facturacion', 'ocupacion', 'volumen', 'credito', 'rentabilidad', 'movimiento']
+      .includes(g.clasificacion?.toLowerCase().trim() || '') ? g.clasificacion : null,
+    se_analiza: g.se_analiza,
+  }));
+
+  for (let i = 0; i < detalles.length; i += 500) {
+    const batch = detalles.slice(i, i + 500);
+    const { error } = await supabase.from('gastos_detalle').insert(batch);
+    if (error) console.error(`Error insertando detalle batch ${i}:`, error);
+    else results.gastos_detalle_insertados += batch.length;
+  }
+
+  // 10. Marcar como procesados
+  await supabase
+    .from('gastos_staging')
+    .update({ procesado: true })
+    .eq('procesado', false);
+
+  results.total_facturacion = final_facturacion;
+  results.total_ocupacion = final_ocupacion;
+  results.total_movimiento = final_movimiento;
+  results.total_credito = final_credito;
+  results.total_rentabilidad = final_rentabilidad;
+  results.total_sin_clasificar = sin_clasificar;
+  results.total_general = total_general;
+
+  return results;
+}
+
+// =============================================================================
+// POST: Procesar staging
+// =============================================================================
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
@@ -33,44 +383,27 @@ export async function POST(request: NextRequest) {
       errors: string[];
     } = { errors: [] };
 
-    // 1. Verificar estado de staging
-    const { data: estadoStaging, error: errorEstado } = await supabase
-      .rpc('verificar_staging');
-
-    if (errorEstado) {
-      console.error('Error verificando staging:', errorEstado);
-      results.errors.push(`Error verificando staging: ${errorEstado.message}`);
-    } else {
-      console.log('Estado staging:', estadoStaging);
-    }
-
-    // 2. Procesar ventas
+    // 1. Procesar ventas
     console.log('Procesando ventas staging...');
-    const { data: ventasResult, error: ventasError } = await supabase
-      .rpc('procesar_ventas_staging', { p_periodo: periodo });
-
-    if (ventasError) {
-      console.error('Error procesando ventas:', ventasError);
-      results.errors.push(`Error procesando ventas: ${ventasError.message}`);
-    } else {
-      results.ventas = ventasResult?.[0] || ventasResult;
+    try {
+      results.ventas = await procesarVentasStaging(periodo);
       console.log('Ventas procesadas:', results.ventas);
+    } catch (error) {
+      console.error('Error procesando ventas:', error);
+      results.errors.push(`Error procesando ventas: ${error instanceof Error ? error.message : error}`);
     }
 
-    // 3. Procesar gastos
+    // 2. Procesar gastos
     console.log('Procesando gastos staging...');
-    const { data: gastosResult, error: gastosError } = await supabase
-      .rpc('procesar_gastos_staging', { p_periodo: periodo });
-
-    if (gastosError) {
-      console.error('Error procesando gastos:', gastosError);
-      results.errors.push(`Error procesando gastos: ${gastosError.message}`);
-    } else {
-      results.gastos = gastosResult?.[0] || gastosResult;
+    try {
+      results.gastos = await procesarGastosStaging(periodo);
       console.log('Gastos procesados:', results.gastos);
+    } catch (error) {
+      console.error('Error procesando gastos:', error);
+      results.errors.push(`Error procesando gastos: ${error instanceof Error ? error.message : error}`);
     }
 
-    // 4. Verificar resultados
+    // 3. Verificar resultados
     const { count: metricasCount } = await supabase
       .from('metricas_producto')
       .select('*', { count: 'exact', head: true })
@@ -105,37 +438,46 @@ export async function POST(request: NextRequest) {
   }
 }
 
+// =============================================================================
+// GET: Verificar estado de staging
+// =============================================================================
 export async function GET() {
   try {
-    // Verificar estado de staging
-    const { data: estadoStaging, error } = await supabase
-      .rpc('verificar_staging');
+    // Consultar directamente las tablas staging
+    const { count: ventasTotal } = await supabase
+      .from('ventas_staging')
+      .select('*', { count: 'exact', head: true });
 
-    if (error) {
-      // Si la función no existe, consultar directamente
-      const { count: ventasCount } = await supabase
-        .from('ventas_staging')
-        .select('*', { count: 'exact', head: true })
-        .eq('procesado', false);
+    const { count: ventasPendientes } = await supabase
+      .from('ventas_staging')
+      .select('*', { count: 'exact', head: true })
+      .eq('procesado', false);
 
-      const { count: gastosCount } = await supabase
-        .from('gastos_staging')
-        .select('*', { count: 'exact', head: true })
-        .eq('procesado', false);
+    const { count: gastosTotal } = await supabase
+      .from('gastos_staging')
+      .select('*', { count: 'exact', head: true });
 
-      return NextResponse.json({
-        success: true,
-        staging: {
-          ventas_pendientes: ventasCount || 0,
-          gastos_pendientes: gastosCount || 0
-        },
-        nota: 'Ejecutá el script procesar_staging.sql en Supabase para crear las funciones'
-      });
-    }
+    const { count: gastosPendientes } = await supabase
+      .from('gastos_staging')
+      .select('*', { count: 'exact', head: true })
+      .eq('procesado', false);
 
     return NextResponse.json({
       success: true,
-      staging: estadoStaging
+      staging: [
+        {
+          tabla: 'ventas_staging',
+          total_registros: ventasTotal || 0,
+          pendientes: ventasPendientes || 0,
+          procesados: (ventasTotal || 0) - (ventasPendientes || 0)
+        },
+        {
+          tabla: 'gastos_staging',
+          total_registros: gastosTotal || 0,
+          pendientes: gastosPendientes || 0,
+          procesados: (gastosTotal || 0) - (gastosPendientes || 0)
+        }
+      ]
     });
 
   } catch (error) {
