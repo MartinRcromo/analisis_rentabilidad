@@ -12,7 +12,8 @@ import {
   AlertCircle,
   Loader2,
   RefreshCw,
-  Play
+  Play,
+  Calculator
 } from 'lucide-react';
 
 interface StagingStatus {
@@ -49,12 +50,22 @@ interface ProcessResult {
   errors?: string[];
 }
 
+interface CalculateResult {
+  success: boolean;
+  productos_analizados?: number;
+  productos_perdida?: number;
+  productos_beneficio?: number;
+  error?: string;
+}
+
 export default function StagingPage() {
   const [periodo, setPeriodo] = useState('');
   const [loading, setLoading] = useState(false);
+  const [calculating, setCalculating] = useState(false);
   const [checkingStatus, setCheckingStatus] = useState(false);
   const [stagingStatus, setStagingStatus] = useState<StagingStatus[] | null>(null);
   const [result, setResult] = useState<ProcessResult | null>(null);
+  const [calculateResult, setCalculateResult] = useState<CalculateResult | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const checkStatus = async () => {
@@ -116,6 +127,46 @@ export default function StagingPage() {
       setError(`Error procesando: ${err}`);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const runCalculation = async () => {
+    if (!result?.periodo) {
+      setError('Primero debe procesar los datos staging');
+      return;
+    }
+
+    setCalculating(true);
+    setError(null);
+    setCalculateResult(null);
+
+    try {
+      const response = await fetch(`/api/calculate/${result.periodo}`, {
+        method: 'POST',
+      });
+
+      const data = await response.json();
+
+      if (response.ok) {
+        setCalculateResult({
+          success: true,
+          productos_analizados: data.productos_analizados,
+          productos_perdida: data.productos_perdida,
+          productos_beneficio: data.productos_beneficio,
+        });
+      } else {
+        setCalculateResult({
+          success: false,
+          error: data.error || 'Error ejecutando cálculo',
+        });
+      }
+    } catch (err) {
+      setCalculateResult({
+        success: false,
+        error: `Error: ${err}`,
+      });
+    } finally {
+      setCalculating(false);
     }
   };
 
@@ -358,13 +409,45 @@ export default function StagingPage() {
                 </div>
               )}
 
-              {/* Botón para ir al dashboard */}
-              <div className="mt-6 flex gap-4">
-                <Button asChild>
-                  <a href={`/api/calculate/${result.periodo}`} target="_blank" rel="noopener noreferrer">
-                    Ejecutar Cálculo de Resultados
-                  </a>
+              {/* Botón para ejecutar cálculo */}
+              <div className="mt-6 flex flex-col gap-4">
+                <Button
+                  onClick={runCalculation}
+                  disabled={calculating}
+                  className="w-full"
+                  size="lg"
+                >
+                  {calculating ? (
+                    <>
+                      <Loader2 className="mr-2 h-5 w-5 animate-spin" />
+                      Calculando...
+                    </>
+                  ) : (
+                    <>
+                      <Calculator className="mr-2 h-5 w-5" />
+                      Ejecutar Cálculo de Resultados
+                    </>
+                  )}
                 </Button>
+
+                {/* Resultado del cálculo */}
+                {calculateResult && (
+                  <div className={`rounded-lg p-4 ${calculateResult.success ? 'bg-green-100' : 'bg-red-100'}`}>
+                    {calculateResult.success ? (
+                      <div className="text-green-800">
+                        <p className="font-semibold">Cálculo completado</p>
+                        <ul className="mt-2 text-sm">
+                          <li>Productos analizados: {calculateResult.productos_analizados}</li>
+                          <li>En beneficio: <span className="text-green-600 font-medium">{calculateResult.productos_beneficio}</span></li>
+                          <li>En pérdida: <span className="text-red-600 font-medium">{calculateResult.productos_perdida}</span></li>
+                        </ul>
+                      </div>
+                    ) : (
+                      <p className="text-red-800">{calculateResult.error}</p>
+                    )}
+                  </div>
+                )}
+
                 <Button variant="outline" asChild>
                   <a href="/dashboard">Ver Dashboard</a>
                 </Button>
