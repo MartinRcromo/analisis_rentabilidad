@@ -478,15 +478,22 @@ async function procesarGastosStaging(periodo: string, reprocesar: boolean = fals
   // Verificar si ya existe gastos_mensuales para este período (ya fue procesado)
   const { data: existingGastos } = await db
     .from('gastos_mensuales')
-    .select('id')
+    .select('*')
     .eq('periodo', periodo)
     .single();
 
-  // Si ya existe y NO es reprocesar, saltar el procesamiento de gastos
+  // Si ya existe y NO es reprocesar, retornar los valores existentes
   if (existingGastos && !reprocesar) {
     results.gastos_ya_procesados = true;
     results.paso_actual = 'Gastos ya procesados para este período';
-    console.log('Gastos ya procesados para este período, saltando...');
+    results.total_facturacion = existingGastos.cat1_facturacion_final || 0;
+    results.total_ocupacion = existingGastos.cat2_volumen_final || 0;
+    results.total_movimiento = existingGastos.cat5_movimiento_final || 0;
+    results.total_credito = existingGastos.cat3_credito_final || 0;
+    results.total_rentabilidad = existingGastos.cat4_rentabilidad_final || 0;
+    results.total_sin_clasificar = existingGastos.total_sin_clasificar || 0;
+    results.total_general = existingGastos.total_general || 0;
+    console.log('Gastos ya procesados para este período, retornando valores existentes...');
     return { ...results, mensaje: 'Gastos ya procesados para este período' };
   }
 
