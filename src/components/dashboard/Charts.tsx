@@ -21,6 +21,7 @@ import {
 const COLORS = {
   facturacion: '#3b82f6',
   volumen: '#8b5cf6',
+  movimiento: '#ec4899',
   credito: '#f59e0b',
   rentabilidad: '#10b981',
   beneficio: '#22c55e',
@@ -38,6 +39,7 @@ interface EvolucionData {
 interface DistribucionData {
   facturacion: number;
   volumen: number;
+  movimiento: number;
   credito: number;
   rentabilidad: number;
 }
@@ -80,11 +82,12 @@ export function EvolucionChart({ data }: { data: EvolucionData[] }) {
 
 // Gráfico de distribución de gastos (donut)
 export function DistribucionGastosChart({ data }: { data: DistribucionData }) {
-  const total = data.facturacion + data.volumen + data.credito + data.rentabilidad;
+  const total = data.facturacion + data.volumen + data.movimiento + data.credito + data.rentabilidad;
 
   const pieData = [
     { name: 'Facturación', value: data.facturacion, color: COLORS.facturacion },
     { name: 'Volumen', value: data.volumen, color: COLORS.volumen },
+    { name: 'Movimiento', value: data.movimiento, color: COLORS.movimiento },
     { name: 'Crédito', value: data.credito, color: COLORS.credito },
     { name: 'Rentabilidad', value: data.rentabilidad, color: COLORS.rentabilidad },
   ];
