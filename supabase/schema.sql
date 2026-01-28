@@ -89,6 +89,10 @@ CREATE TABLE IF NOT EXISTS metricas_producto (
     stock_costo NUMERIC(15,2),
     stock_volumen NUMERIC(10,4),
 
+    -- Movimiento (para categoría 5)
+    unidades_vendidas NUMERIC(12,2) DEFAULT 0,
+    veces_pedido NUMERIC(10,0) DEFAULT 0,
+
     UNIQUE(producto_id, periodo),
     created_at TIMESTAMP DEFAULT NOW()
 );
@@ -109,6 +113,7 @@ CREATE TABLE IF NOT EXISTS gastos_mensuales (
     cat2_volumen_base NUMERIC(15,2) NOT NULL,
     cat3_credito_base NUMERIC(15,2) NOT NULL,
     cat4_rentabilidad_base NUMERIC(15,2) NOT NULL,
+    cat5_movimiento_base NUMERIC(15,2) DEFAULT 0,
     total_clasificado NUMERIC(15,2) NOT NULL,
 
     -- Sin clasificar
@@ -120,12 +125,14 @@ CREATE TABLE IF NOT EXISTS gastos_mensuales (
     peso_volumen NUMERIC(10,8) NOT NULL,
     peso_credito NUMERIC(10,8) NOT NULL,
     peso_rentabilidad NUMERIC(10,8) NOT NULL,
+    peso_movimiento NUMERIC(10,8) DEFAULT 0,
 
     -- Totales FINALES (después de ajuste)
     cat1_facturacion_final NUMERIC(15,2) NOT NULL,
     cat2_volumen_final NUMERIC(15,2) NOT NULL,
     cat3_credito_final NUMERIC(15,2) NOT NULL,
     cat4_rentabilidad_final NUMERIC(15,2) NOT NULL,
+    cat5_movimiento_final NUMERIC(15,2) DEFAULT 0,
 
     created_at TIMESTAMP DEFAULT NOW()
 );
@@ -183,17 +190,19 @@ CREATE TABLE IF NOT EXISTS analisis_producto (
     producto_id INTEGER REFERENCES productos(id),
     periodo DATE NOT NULL,
 
-    -- Porcentajes de asignación
+    -- Porcentajes de asignación (5 categorías)
     porcentaje_facturacion NUMERIC(12,10),
     porcentaje_volumen NUMERIC(12,10),
     porcentaje_credito NUMERIC(12,10),
     porcentaje_markup NUMERIC(12,10),
+    porcentaje_movimiento NUMERIC(12,10) DEFAULT 0,
 
-    -- Gastos asignados
+    -- Gastos asignados (5 categorías)
     gasto_facturacion NUMERIC(15,2),
     gasto_volumen NUMERIC(15,2),
     gasto_credito NUMERIC(15,2),
     gasto_markup NUMERIC(15,2),
+    gasto_movimiento NUMERIC(15,2) DEFAULT 0,
     gasto_total NUMERIC(15,2),
 
     -- Resultado
