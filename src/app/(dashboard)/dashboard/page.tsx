@@ -40,6 +40,7 @@ interface DashboardData {
   distribucion_gastos: {
     facturacion: number;
     volumen: number;
+    movimiento: number;
     credito: number;
     rentabilidad: number;
   };
