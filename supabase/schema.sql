@@ -82,7 +82,7 @@ CREATE TABLE IF NOT EXISTS metricas_producto (
     importe_ventas NUMERIC(15,2),
     importe_costo NUMERIC(15,2),
     margen_bruto NUMERIC(15,2),
-    markup_pct NUMERIC(8,4),
+    markup_pct NUMERIC(12,4),
 
     -- Stock
     stock_unidades NUMERIC(10,2),
@@ -208,7 +208,7 @@ CREATE TABLE IF NOT EXISTS analisis_producto (
     -- Resultado
     resultado NUMERIC(15,2),
     en_perdida BOOLEAN,
-    markup_minimo_pct NUMERIC(8,4),
+    markup_minimo_pct NUMERIC(12,4),
     cumple_objetivo BOOLEAN,
 
     UNIQUE(producto_id, periodo),

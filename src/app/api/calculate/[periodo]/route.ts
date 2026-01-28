@@ -184,8 +184,9 @@ export async function POST(
       const resultado = margen_bruto - gasto_total;
       const en_perdida = resultado < 0;
 
-      // Markup mínimo
-      const markup_minimo_pct = importe_costo > 0 ? (gasto_total / importe_costo) * 100 : 0;
+      // Markup mínimo - capped at 9999.9999 to prevent NUMERIC(8,4) overflow
+      const markup_minimo_raw = importe_costo > 0 ? (gasto_total / importe_costo) * 100 : 0;
+      const markup_minimo_pct = Math.min(markup_minimo_raw, 9999.9999);
       const cumple_objetivo = markup_pct >= markup_minimo_pct;
 
       return {
