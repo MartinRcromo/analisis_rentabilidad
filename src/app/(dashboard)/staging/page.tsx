@@ -79,7 +79,9 @@ interface CalculateResult {
   productos_analizados?: number;
   productos_perdida?: number;
   productos_beneficio?: number;
+  metricas_encontradas?: number;
   error?: string;
+  errores?: string[];
 }
 
 export default function StagingPage() {
@@ -327,29 +329,44 @@ export default function StagingPage() {
     setCalculateResult(null);
 
     try {
-      const response = await fetch(`/api/calculate/${result.periodo}`, {
+      const response = await fetch(`/api/calculate/${encodeURIComponent(result.periodo)}`, {
         method: 'POST',
       });
 
       const data = await response.json();
 
       if (response.ok) {
+        // Check if the API returned success=false even with 200 status
+        const hasErrors = data.errores && data.errores.length > 0;
+        const actualSuccess = data.success !== false && data.productos_analizados > 0;
+
         setCalculateResult({
-          success: true,
-          productos_analizados: data.productos_analizados,
-          productos_perdida: data.productos_perdida,
-          productos_beneficio: data.productos_beneficio,
+          success: actualSuccess,
+          productos_analizados: data.productos_analizados || 0,
+          productos_perdida: data.productos_perdida || 0,
+          productos_beneficio: data.productos_beneficio || 0,
+          metricas_encontradas: data.metricas_encontradas,
+          errores: hasErrors ? data.errores : undefined,
+          error: !actualSuccess && data.productos_analizados === 0
+            ? `No se pudieron insertar análisis. Métricas encontradas: ${data.metricas_encontradas || 0}`
+            : undefined,
         });
+
+        // Show warning if there were partial errors
+        if (hasErrors && actualSuccess) {
+          console.warn('Cálculo completado con errores parciales:', data.errores);
+        }
       } else {
         setCalculateResult({
           success: false,
           error: data.error || 'Error ejecutando cálculo',
+          errores: data.errores,
         });
       }
     } catch (err) {
       setCalculateResult({
         success: false,
-        error: `Error: ${err}`,
+        error: `Error de conexión: ${err}`,
       });
     } finally {
       setCalculating(false);
@@ -770,9 +787,38 @@ export default function StagingPage() {
                           <li>En beneficio: <span className="text-green-600 font-medium">{calculateResult.productos_beneficio}</span></li>
                           <li>En pérdida: <span className="text-red-600 font-medium">{calculateResult.productos_perdida}</span></li>
                         </ul>
+                        {calculateResult.errores && calculateResult.errores.length > 0 && (
+                          <div className="mt-3 p-2 bg-yellow-100 rounded text-yellow-800 text-xs">
+                            <p className="font-medium">Advertencias ({calculateResult.errores.length}):</p>
+                            <ul className="mt-1 max-h-20 overflow-y-auto">
+                              {calculateResult.errores.slice(0, 5).map((err, idx) => (
+                                <li key={idx}>{err}</li>
+                              ))}
+                              {calculateResult.errores.length > 5 && (
+                                <li>... y {calculateResult.errores.length - 5} más</li>
+                              )}
+                            </ul>
+                          </div>
+                        )}
                       </div>
                     ) : (
-                      <p className="text-red-800">{calculateResult.error}</p>
+                      <div className="text-red-800">
+                        <p className="font-semibold">Error en cálculo</p>
+                        <p className="mt-1">{calculateResult.error}</p>
+                        {calculateResult.metricas_encontradas !== undefined && (
+                          <p className="mt-1 text-sm">Métricas encontradas: {calculateResult.metricas_encontradas}</p>
+                        )}
+                        {calculateResult.errores && calculateResult.errores.length > 0 && (
+                          <div className="mt-3 p-2 bg-red-200 rounded text-xs">
+                            <p className="font-medium">Errores detallados ({calculateResult.errores.length}):</p>
+                            <ul className="mt-1 max-h-32 overflow-y-auto font-mono">
+                              {calculateResult.errores.map((err, idx) => (
+                                <li key={idx} className="border-b border-red-300 pb-1 mb-1">{err}</li>
+                              ))}
+                            </ul>
+                          </div>
+                        )}
+                      </div>
                     )}
                   </div>
                 )}
