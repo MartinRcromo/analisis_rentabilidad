@@ -26,48 +26,34 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    // 1. Obtener resumen del período
-    let resumenQuery = supabase
-      .from('analisis_producto')
-      .select(`
-        resultado,
-        en_perdida,
-        producto:productos!inner(empresa)
-      `)
-      .eq('periodo', periodoActual);
+    // 1. Obtener resumen del período usando función SQL optimizada
+    // Esto evita el límite implícito de 1000 registros de Supabase
+    const { data: resumenData, error: errorResumen } = await supabase.rpc('calcular_resumen_dashboard', {
+      p_periodo: periodoActual,
+      p_empresa: empresa,
+    });
 
-    if (empresa !== 'todas') {
-      resumenQuery = resumenQuery.eq('producto.empresa', empresa);
-    }
-
-    const { data: analisisData, error: errorAnalisis } = await resumenQuery;
-
-    if (errorAnalisis) {
-      console.error('Error obteniendo análisis:', errorAnalisis);
+    if (errorResumen) {
+      console.error('Error obteniendo resumen:', errorResumen);
       return NextResponse.json({ error: 'Error obteniendo datos de análisis' }, { status: 500 });
     }
 
-    const total_productos = analisisData?.length || 0;
-    let productos_perdida = 0;
-    let perdida_total = 0;
-    let beneficio_total = 0;
-
-    (analisisData || []).forEach((a) => {
-      if (a.en_perdida) {
-        productos_perdida++;
-        perdida_total += a.resultado;
-      } else {
-        beneficio_total += a.resultado;
-      }
-    });
+    const resumenRow = resumenData?.[0] || {
+      total_productos: 0,
+      productos_perdida: 0,
+      perdida_total: 0,
+      beneficio_total: 0,
+      resultado_neto: 0,
+      pct_perdida: 0,
+    };
 
     const resumen = {
-      total_productos,
-      productos_perdida,
-      perdida_total,
-      beneficio_total,
-      resultado_neto: beneficio_total + perdida_total,
-      pct_perdida: total_productos > 0 ? (productos_perdida / total_productos) * 100 : 0,
+      total_productos: Number(resumenRow.total_productos),
+      productos_perdida: Number(resumenRow.productos_perdida),
+      perdida_total: Number(resumenRow.perdida_total),
+      beneficio_total: Number(resumenRow.beneficio_total),
+      resultado_neto: Number(resumenRow.resultado_neto),
+      pct_perdida: Number(resumenRow.pct_perdida),
     };
 
     // 2. Obtener distribución de gastos
@@ -93,53 +79,17 @@ export async function GET(request: NextRequest) {
           movimiento: 0,
         };
 
-    // 3. Obtener evolución últimos 6 meses
-    const { data: periodos } = await supabase
-      .from('analisis_producto')
-      .select('periodo')
-      .order('periodo', { ascending: false });
+    // 3. Obtener evolución últimos 6 meses usando función SQL optimizada
+    const { data: evolucionData, error: errorEvolucion } = await supabase.rpc('calcular_evolucion_dashboard', {
+      p_empresa: empresa,
+    });
 
-    const periodosUnicos = [...new Set((periodos || []).map((p) => p.periodo))].slice(0, 6);
-
-    const evolucion_6_meses = [];
-
-    for (const p of periodosUnicos) {
-      let evoQuery = supabase
-        .from('analisis_producto')
-        .select(`
-          resultado,
-          en_perdida,
-          producto:productos!inner(empresa)
-        `)
-        .eq('periodo', p);
-
-      if (empresa !== 'todas') {
-        evoQuery = evoQuery.eq('producto.empresa', empresa);
-      }
-
-      const { data: evoData } = await evoQuery;
-
-      let beneficio = 0;
-      let perdida = 0;
-
-      (evoData || []).forEach((a) => {
-        if (a.en_perdida) {
-          perdida += a.resultado;
-        } else {
-          beneficio += a.resultado;
-        }
-      });
-
-      evolucion_6_meses.push({
-        periodo: p,
-        beneficio,
-        perdida,
-        resultado: beneficio + perdida,
-      });
-    }
-
-    // Ordenar cronológicamente
-    evolucion_6_meses.sort((a, b) => a.periodo.localeCompare(b.periodo));
+    const evolucion_6_meses = (evolucionData || []).map((e: { periodo: string; beneficio: number; perdida: number; resultado: number }) => ({
+      periodo: e.periodo,
+      beneficio: Number(e.beneficio),
+      perdida: Number(e.perdida),
+      resultado: Number(e.resultado),
+    }));
 
     // 4. Obtener top subrubros usando función SQL optimizada (< 1 segundo)
     const { data: subrubrosData } = await supabase.rpc('calcular_subrubros', {
