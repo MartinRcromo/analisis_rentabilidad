@@ -221,19 +221,21 @@ async function procesarVentasStaging(periodo: string, reprocesar: boolean = fals
   const compradorMap = new Map(compradoresDb?.map(c => [c.codigo, c.id]) || []);
   const categoriaMap = new Map(categoriasDb?.map(c => [c.codigo, c.id]) || []);
 
-  // 9. Upsert productos (eliminar duplicados)
+  // 9. Upsert productos (eliminar duplicados usando clave compuesta codigo|empresa)
   type ProductoUnico = {codigo: string; nombre: string; empresa: string; subrubro_id: number | null; proveedor_id: number | null; comprador_id: number | null; categoria_id: number | null};
   const productosUnicos: ProductoUnico[] = [];
-  const codigosVistos = new Set<string>();
+  const productosVistos = new Set<string>();
 
   for (const v of ventasStaging) {
     const codigo = String(v.idproducto || '');
-    if (codigo && !codigosVistos.has(codigo)) {
-      codigosVistos.add(codigo);
+    const empresa = String(v.empresa || '');
+    const productKey = `${codigo}|${empresa}`;
+    if (codigo && empresa && !productosVistos.has(productKey)) {
+      productosVistos.add(productKey);
       productosUnicos.push({
         codigo,
         nombre: String(v.producto || ''),
-        empresa: String(v.empresa || ''),
+        empresa,
         subrubro_id: subrubroMap.get(String(v.subrubro || '')) || null,
         proveedor_id: proveedorMap.get(String(v.idproveedor || '')) || null,
         comprador_id: compradorMap.get(String(v.idcomprador || '')) || null,
@@ -250,7 +252,7 @@ async function procesarVentasStaging(periodo: string, reprocesar: boolean = fals
       const batch = productosUnicos.slice(i, i + 500);
       const { error } = await db
         .from('productos')
-        .upsert(batch, { onConflict: 'codigo' });
+        .upsert(batch, { onConflict: 'codigo,empresa' });
       if (error) {
         const errorMsg = `Error upsert productos batch ${i}-${i+batch.length}: ${error.message} (code: ${error.code})`;
         console.error(errorMsg);
@@ -264,9 +266,9 @@ async function procesarVentasStaging(periodo: string, reprocesar: boolean = fals
 
   console.log(`Productos únicos procesados: ${results.productos_procesados}`);
 
-  // 10. Obtener IDs de productos
+  // 10. Obtener IDs de productos (usando clave compuesta codigo|empresa)
   const productosDb = await fetchAllRecords('productos');
-  const productoMap = new Map(productosDb?.map(p => [p.codigo, p.id]) || []);
+  const productoMap = new Map(productosDb?.map(p => [`${p.codigo}|${p.empresa}`, p.id]) || []);
 
   console.log(`Productos en BD: ${productoMap.size}`);
 
@@ -277,11 +279,14 @@ async function procesarVentasStaging(periodo: string, reprocesar: boolean = fals
   // 12. Insertar métricas (en lotes de 500)
   results.paso_actual = 'Preparando métricas';
 
-  // Contar productos sin mapeo para diagnóstico
-  const sinMapeo = ventasStaging.filter(v => v.idproducto && !productoMap.has(String(v.idproducto)));
+  // Contar productos sin mapeo para diagnóstico (usando clave compuesta codigo|empresa)
+  const sinMapeo = ventasStaging.filter(v => {
+    const productKey = `${v.idproducto}|${v.empresa}`;
+    return v.idproducto && !productoMap.has(productKey);
+  });
   results.productos_sin_mapeo = sinMapeo.length;
   if (sinMapeo.length > 0) {
-    const ejemplos = sinMapeo.slice(0, 5).map(v => String(v.idproducto));
+    const ejemplos = sinMapeo.slice(0, 5).map(v => `${v.idproducto}|${v.empresa}`);
     results.errores_detallados.push(`${sinMapeo.length} registros sin mapeo de producto. Ejemplos: ${ejemplos.join(', ')}`);
   }
 
@@ -299,9 +304,10 @@ async function procesarVentasStaging(periodo: string, reprocesar: boolean = fals
   }>();
 
   for (const v of ventasStaging) {
-    if (!v.idproducto || !productoMap.has(String(v.idproducto))) continue;
+    const productKey = `${v.idproducto}|${v.empresa}`;
+    if (!v.idproducto || !productoMap.has(productKey)) continue;
 
-    const productoId = productoMap.get(String(v.idproducto)) as number;
+    const productoId = productoMap.get(productKey) as number;
     const importeVentas = Number(v.importe_ventas) || 0;
     const importeCosto = Number(v.importe_costo) || 0;
 

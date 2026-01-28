@@ -50,7 +50,7 @@ CREATE TABLE IF NOT EXISTS subrubros (
 
 CREATE TABLE IF NOT EXISTS productos (
     id SERIAL PRIMARY KEY,
-    codigo VARCHAR(50) UNIQUE NOT NULL,
+    codigo VARCHAR(50) NOT NULL,
     nombre VARCHAR(500) NOT NULL,
     empresa VARCHAR(10) NOT NULL,
     subrubro_id INTEGER REFERENCES subrubros(id),
@@ -60,10 +60,12 @@ CREATE TABLE IF NOT EXISTS productos (
     activo BOOLEAN DEFAULT true,
     created_at TIMESTAMP DEFAULT NOW(),
 
+    UNIQUE(codigo, empresa),
     CHECK (empresa IN ('Cromo', 'BBA'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_productos_empresa ON productos(empresa);
+CREATE INDEX IF NOT EXISTS idx_productos_codigo_empresa ON productos(codigo, empresa);
 CREATE INDEX IF NOT EXISTS idx_productos_subrubro ON productos(subrubro_id);
 CREATE INDEX IF NOT EXISTS idx_productos_proveedor ON productos(proveedor_id);
 
