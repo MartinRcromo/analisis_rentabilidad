@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -97,13 +97,7 @@ export default function SimularPage() {
     }
   }, [params.id]);
 
-  useEffect(() => {
-    if (productoInfo) {
-      runSimulation();
-    }
-  }, [deltaMarkup, reduccionStock, productoInfo]);
-
-  async function runSimulation() {
+  const runSimulation = useCallback(async () => {
     if (!productoInfo) return;
 
     setSimulating(true);
@@ -127,7 +121,13 @@ export default function SimularPage() {
     } finally {
       setSimulating(false);
     }
-  }
+  }, [productoInfo, deltaMarkup, reduccionStock, params.id]);
+
+  useEffect(() => {
+    if (productoInfo) {
+      runSimulation();
+    }
+  }, [runSimulation, productoInfo]);
 
   const formatCurrency = (num: number) => {
     if (Math.abs(num) >= 1e6) return `$${(num / 1e6).toFixed(2)}M`;

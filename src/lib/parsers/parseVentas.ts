@@ -35,12 +35,6 @@ const REQUIRED_COLUMNS = [
   'stock_volumen',
 ];
 
-// Columnas opcionales (para modelo de 5 grupos de gastos)
-const OPTIONAL_COLUMNS = [
-  'unidades_vendidas',
-  'veces_pedido',
-];
-
 export async function parseVentasExcel(buffer: ArrayBuffer): Promise<ParseVentasResult> {
   const errors: string[] = [];
   const data: VentaExcelRow[] = [];

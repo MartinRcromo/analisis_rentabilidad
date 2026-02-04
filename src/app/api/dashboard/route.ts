@@ -80,7 +80,7 @@ export async function GET(request: NextRequest) {
         };
 
     // 3. Obtener evolución últimos 6 meses usando función SQL optimizada
-    const { data: evolucionData, error: errorEvolucion } = await supabase.rpc('calcular_evolucion_dashboard', {
+    const { data: evolucionData } = await supabase.rpc('calcular_evolucion_dashboard', {
       p_empresa: empresa,
     });
 

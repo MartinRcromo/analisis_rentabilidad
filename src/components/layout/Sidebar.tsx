@@ -32,11 +32,13 @@ const navigation = [
 export function Sidebar() {
   const pathname = usePathname();
   const [isOpen, setIsOpen] = useState(false);
+  const [prevPathname, setPrevPathname] = useState(pathname);
 
   // Close sidebar on route change (mobile)
-  useEffect(() => {
+  if (prevPathname !== pathname) {
+    setPrevPathname(pathname);
     setIsOpen(false);
-  }, [pathname]);
+  }
 
   // Close sidebar when clicking outside (mobile)
   useEffect(() => {

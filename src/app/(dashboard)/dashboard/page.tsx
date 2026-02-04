@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { MetricCard } from '@/components/dashboard/MetricCard';
@@ -54,11 +54,7 @@ export default function DashboardPage() {
   const [error, setError] = useState<string | null>(null);
   const [empresa, setEmpresa] = useState('todas');
 
-  useEffect(() => {
-    fetchDashboard();
-  }, [empresa]);
-
-  async function fetchDashboard() {
+  const fetchDashboard = useCallback(async () => {
     setLoading(true);
     setError(null);
 
@@ -75,7 +71,11 @@ export default function DashboardPage() {
     } finally {
       setLoading(false);
     }
-  }
+  }, [empresa]);
+
+  useEffect(() => {
+    fetchDashboard();
+  }, [fetchDashboard]);
 
   if (loading) {
     return <DashboardSkeleton />;
