@@ -26,47 +26,92 @@ const BATCH_LIMIT = 2000; // Máximo registros por llamada para evitar timeout
 // =============================================================================
 // HELPER: Obtener registros con límite (para procesamiento por lotes)
 // =============================================================================
-async function fetchRecordsWithLimit(table: string, limit: number, filter?: { column: string; value: boolean }) {
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function fetchRecordsWithLimit(table: string, limit: number, options?: { filter?: { column: string; value: boolean }; columns?: string }): Promise<Record<string, any>[]> {
   const db = getSupabase();
-  let query = db
-    .from(table)
-    .select('*')
-    .limit(limit);
+  const MAX_RETRIES = 3;
+  const columns = options?.columns || '*';
 
-  if (filter) {
-    query = query.eq(filter.column, filter.value);
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    let query = db
+      .from(table)
+      .select(columns)
+      .limit(limit);
+
+    if (options?.filter) {
+      query = query.eq(options.filter.column, options.filter.value);
+    }
+
+    const { data, error } = await query;
+
+    if (error) {
+      if (attempt < MAX_RETRIES) {
+        const delay = Math.pow(2, attempt) * 1000;
+        console.warn(`Retry ${attempt + 1}/${MAX_RETRIES} for ${table} after ${delay}ms: ${error.message}`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+        continue;
+      }
+      throw new Error(`Error leyendo ${table}: ${error.message}`);
+    }
+
+    return (data as unknown as Record<string, unknown>[]) || [];
   }
 
-  const { data, error } = await query;
-
-  if (error) throw new Error(`Error leyendo ${table}: ${error.message}`);
-
-  return data || [];
+  return [];
 }
 
 // =============================================================================
 // HELPER: Obtener todos los registros con paginación (para tablas maestras)
 // =============================================================================
-async function fetchAllRecords(table: string, filter?: { column: string; value: boolean }) {
+async function fetchAllRecords(
+  table: string,
+  options?: {
+    columns?: string;
+    filter?: { column: string; value: boolean };
+    retries?: number;
+  }
+) {
   const PAGE_SIZE = 1000;
+  const MAX_RETRIES = options?.retries ?? 3;
   let allRecords: Record<string, unknown>[] = [];
   let offset = 0;
   let hasMore = true;
   const db = getSupabase();
+  const columns = options?.columns || '*';
 
   while (hasMore) {
-    let query = db
-      .from(table)
-      .select('*')
-      .range(offset, offset + PAGE_SIZE - 1);
+    let lastError: Error | null = null;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let data: any[] | null = null;
 
-    if (filter) {
-      query = query.eq(filter.column, filter.value);
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      let query = db
+        .from(table)
+        .select(columns)
+        .range(offset, offset + PAGE_SIZE - 1);
+
+      if (options?.filter) {
+        query = query.eq(options.filter.column, options.filter.value);
+      }
+
+      const result = await query;
+
+      if (result.error) {
+        lastError = new Error(`Error leyendo ${table}: ${result.error.message}`);
+        if (attempt < MAX_RETRIES) {
+          const delay = Math.pow(2, attempt) * 1000;
+          console.warn(`Retry ${attempt + 1}/${MAX_RETRIES} for ${table} (offset ${offset}) after ${delay}ms`);
+          await new Promise(resolve => setTimeout(resolve, delay));
+          continue;
+        }
+      } else {
+        data = result.data as unknown as Record<string, unknown>[] | null;
+        lastError = null;
+        break;
+      }
     }
 
-    const { data, error } = await query;
-
-    if (error) throw new Error(`Error leyendo ${table}: ${error.message}`);
+    if (lastError) throw lastError;
 
     if (data && data.length > 0) {
       allRecords = [...allRecords, ...data];
@@ -117,7 +162,7 @@ async function procesarVentasStaging(periodo: string, reprocesar: boolean = fals
 
   // 2. Obtener UN LOTE de datos de staging pendientes (máximo BATCH_LIMIT)
   console.log(`Obteniendo hasta ${BATCH_LIMIT} registros de ventas_staging...`);
-  const ventasStaging = await fetchRecordsWithLimit('ventas_staging', BATCH_LIMIT, { column: 'procesado', value: false });
+  const ventasStaging = await fetchRecordsWithLimit('ventas_staging', BATCH_LIMIT, { filter: { column: 'procesado', value: false } });
 
   // Contar pendientes totales para informar progreso
   const { count: totalPendientes } = await db
@@ -267,7 +312,8 @@ async function procesarVentasStaging(periodo: string, reprocesar: boolean = fals
   console.log(`Productos únicos procesados: ${results.productos_procesados}`);
 
   // 10. Obtener IDs de productos (usando clave compuesta codigo|empresa)
-  const productosDb = await fetchAllRecords('productos');
+  // Solo traemos las columnas necesarias para el mapeo (evita 500 por payload grande)
+  const productosDb = await fetchAllRecords('productos', { columns: 'id, codigo, empresa' });
   const productoMap = new Map(productosDb?.map(p => [`${p.codigo}|${p.empresa}`, p.id]) || []);
 
   console.log(`Productos en BD: ${productoMap.size}`);
@@ -351,15 +397,20 @@ async function procesarVentasStaging(periodo: string, reprocesar: boolean = fals
     // Obtener producto_ids para buscar métricas existentes
     const productoIds = metricas.map(m => m.producto_id);
 
-    // Buscar métricas existentes del período para estos productos (en lotes anteriores)
-    const { data: metricasExistentes } = await db
-      .from('metricas_producto')
-      .select('*')
-      .eq('periodo', periodo)
-      .in('producto_id', productoIds);
+    // Buscar métricas existentes del período para estos productos (en lotes para evitar límites de IN clause)
+    const metricasExistentes: Record<string, unknown>[] = [];
+    for (let i = 0; i < productoIds.length; i += 500) {
+      const batchIds = productoIds.slice(i, i + 500);
+      const { data } = await db
+        .from('metricas_producto')
+        .select('producto_id, importe_ventas, importe_costo, stock_unidades, stock_costo, stock_volumen, unidades_vendidas, veces_pedido')
+        .eq('periodo', periodo)
+        .in('producto_id', batchIds);
+      if (data) metricasExistentes.push(...data);
+    }
 
     const existentesMap = new Map(
-      metricasExistentes?.map(m => [m.producto_id, m]) || []
+      metricasExistentes.map(m => [m.producto_id, m])
     );
 
     // Preparar métricas para upsert (sumando valores si ya existen)
@@ -565,7 +616,7 @@ async function procesarGastosStaging(periodo: string, reprocesar: boolean = fals
   // 2. Obtener UN LOTE de datos de staging pendientes (máximo GASTOS_BATCH_LIMIT)
   results.paso_actual = 'Obteniendo registros de gastos_staging...';
   console.log(`Obteniendo hasta ${GASTOS_BATCH_LIMIT} registros de gastos_staging...`);
-  const gastosStaging = await fetchRecordsWithLimit('gastos_staging', GASTOS_BATCH_LIMIT, { column: 'procesado', value: false });
+  const gastosStaging = await fetchRecordsWithLimit('gastos_staging', GASTOS_BATCH_LIMIT, { filter: { column: 'procesado', value: false } });
 
   // Contar pendientes totales para informar progreso
   const { count: totalPendientes } = await db
