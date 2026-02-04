@@ -1,5 +1,45 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase/server';
+import { SupabaseClient } from '@supabase/supabase-js';
+
+// Helper to fetch all records with pagination (Supabase limits to 1000 per query)
+async function fetchAllFromTable(
+  supabase: SupabaseClient,
+  table: string,
+  query: { select: string; eq?: { column: string; value: string }; not?: { column: string; operator: string; value: null } }
+): Promise<Record<string, unknown>[]> {
+  const PAGE_SIZE = 1000;
+  const allRecords: Record<string, unknown>[] = [];
+  let offset = 0;
+  let hasMore = true;
+
+  while (hasMore) {
+    let q = supabase.from(table).select(query.select).range(offset, offset + PAGE_SIZE - 1);
+
+    if (query.eq) {
+      q = q.eq(query.eq.column, query.eq.value);
+    }
+    if (query.not) {
+      q = q.not(query.not.column, query.not.operator, query.not.value);
+    }
+
+    const { data, error } = await q;
+
+    if (error) {
+      throw error;
+    }
+
+    if (!data || data.length === 0) {
+      hasMore = false;
+    } else {
+      allRecords.push(...(data as unknown as Record<string, unknown>[]));
+      hasMore = data.length === PAGE_SIZE;
+      offset += PAGE_SIZE;
+    }
+  }
+
+  return allRecords;
+}
 
 // Helper to normalize periodo to YYYY-MM-DD format
 function normalizePeriodo(periodo: string): string {
@@ -69,20 +109,26 @@ export async function POST(
       movimiento: gastos.cat5_movimiento_final,
     });
 
-    // 2. Obtener totales del período
+    // 2. Obtener totales del período (con paginación para superar límite de 1000 de Supabase)
     console.log(`[Calculate] Buscando métricas para periodo: ${periodo}`);
-    const { data: totalesData, error: errorTotales } = await supabase
-      .from('metricas_producto')
-      .select('importe_ventas, stock_volumen, stock_costo, margen_bruto, veces_pedido')
-      .eq('periodo', periodo);
-
-    if (errorTotales) {
-      console.error(`[Calculate] Error buscando métricas: ${errorTotales.message}`);
+    let totalesData: Record<string, unknown>[];
+    try {
+      totalesData = await fetchAllFromTable(supabase, 'metricas_producto', {
+        select: 'importe_ventas, stock_volumen, stock_costo, margen_bruto, veces_pedido',
+        eq: { column: 'periodo', value: periodo },
+      });
+    } catch (errorTotales) {
+      const msg = errorTotales instanceof Error ? errorTotales.message : String(errorTotales);
+      console.error(`[Calculate] Error buscando métricas: ${msg}`);
+      return NextResponse.json(
+        { error: `No se encontraron ventas para el período ${periodo}. Cargue primero las ventas.` },
+        { status: 400 }
+      );
     }
 
-    console.log(`[Calculate] Métricas encontradas para totales: ${totalesData?.length || 0}`);
+    console.log(`[Calculate] Métricas encontradas para totales: ${totalesData.length}`);
 
-    if (errorTotales || !totalesData || totalesData.length === 0) {
+    if (totalesData.length === 0) {
       return NextResponse.json(
         { error: `No se encontraron ventas para el período ${periodo}. Cargue primero las ventas.` },
         { status: 400 }
@@ -104,21 +150,19 @@ export async function POST(
 
     console.log(`[Calculate] Totales calculados:`, totales);
 
-    // 3. Obtener todas las métricas del período (solo con producto_id válido)
+    // 3. Obtener todas las métricas del período (con paginación para superar límite de 1000 de Supabase)
     console.log(`[Calculate] Obteniendo métricas completas para periodo: ${periodo}`);
-    const { data: metricasRaw, error: errorMetricas } = await supabase
-      .from('metricas_producto')
-      .select('*')
-      .eq('periodo', periodo)
-      .not('producto_id', 'is', null);
-
-    if (errorMetricas) {
-      console.error(`[Calculate] Error obteniendo métricas: ${errorMetricas.message}`);
-      return NextResponse.json({ error: `Error obteniendo métricas: ${errorMetricas.message}` }, { status: 500 });
-    }
-
-    if (!metricasRaw) {
-      return NextResponse.json({ error: 'Error obteniendo métricas: respuesta vacía' }, { status: 500 });
+    let metricasRaw: Record<string, unknown>[];
+    try {
+      metricasRaw = await fetchAllFromTable(supabase, 'metricas_producto', {
+        select: '*',
+        eq: { column: 'periodo', value: periodo },
+        not: { column: 'producto_id', operator: 'is', value: null },
+      });
+    } catch (errorMetricas) {
+      const msg = errorMetricas instanceof Error ? errorMetricas.message : String(errorMetricas);
+      console.error(`[Calculate] Error obteniendo métricas: ${msg}`);
+      return NextResponse.json({ error: `Error obteniendo métricas: ${msg}` }, { status: 500 });
     }
 
     // Filter out any records with null producto_id (extra safety)
@@ -148,13 +192,13 @@ export async function POST(
 
     // 5. Calcular análisis para cada producto
     const analisisData = metricas.map((m) => {
-      const importe_ventas = m.importe_ventas || 0;
-      const importe_costo = m.importe_costo || 0;
-      const margen_bruto = m.margen_bruto || 0;
-      const markup_pct = m.markup_pct || 0;
-      const stock_costo = m.stock_costo || 0;
-      const stock_volumen = m.stock_volumen || 0;
-      const veces_pedido = m.veces_pedido || 0;
+      const importe_ventas = Number(m.importe_ventas) || 0;
+      const importe_costo = Number(m.importe_costo) || 0;
+      const margen_bruto = Number(m.margen_bruto) || 0;
+      const markup_pct = Number(m.markup_pct) || 0;
+      const stock_costo = Number(m.stock_costo) || 0;
+      const stock_volumen = Number(m.stock_volumen) || 0;
+      const veces_pedido = Number(m.veces_pedido) || 0;
 
       // Calcular porcentajes de asignación
       const porcentaje_facturacion =
