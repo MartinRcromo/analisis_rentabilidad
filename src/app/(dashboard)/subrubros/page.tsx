@@ -309,7 +309,7 @@ export default function SubrubrosPage() {
                       >
                         <TableCell className="max-w-[150px] sm:max-w-[200px]">
                           <Link
-                            href={`/productos?subrubro_id=${subrubro.subrubro_id}&empresa=${subrubro.empresa}`}
+                            href={`/subrubros/${subrubro.subrubro_id}?empresa=${subrubro.empresa}`}
                             className="block truncate font-medium hover:text-blue-600 hover:underline"
                             title={subrubro.subrubro}
                           >
@@ -358,7 +358,7 @@ export default function SubrubrosPage() {
                         </TableCell>
                         <TableCell className="text-center hidden sm:table-cell">
                           <Button asChild size="sm" variant="ghost" className="h-7 px-2">
-                            <Link href={`/productos?subrubro_id=${subrubro.subrubro_id}&empresa=${subrubro.empresa}`}>
+                            <Link href={`/subrubros/${subrubro.subrubro_id}?empresa=${subrubro.empresa}`}>
                               →
                             </Link>
                           </Button>
