@@ -222,7 +222,8 @@ export function EvolucionResultadoChart({ data }: { data: EvolucionResultadoData
 
 function formatPeriodoShort(periodo: string): string {
   try {
-    const date = new Date(periodo);
+    // Agregar T12:00:00 para evitar problemas de zona horaria
+    const date = new Date(periodo + 'T12:00:00');
     return date.toLocaleDateString('es-AR', { month: 'short', year: '2-digit' });
   } catch {
     return periodo;
