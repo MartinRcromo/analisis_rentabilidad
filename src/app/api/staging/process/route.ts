@@ -366,7 +366,7 @@ async function procesarVentasStaging(periodo: string, reprocesar: boolean = fals
       existing.stock_costo += Number(v.stock_costo) || 0;
       existing.stock_volumen += Number(v.stock_volumen) || 0;
       existing.unidades_vendidas += Number(v.unidades_vendidas) || 0;
-      existing.veces_pedido += Number(v.veces_pedido) || 1;
+      existing.veces_pedido += Number(v.veces_pedido) || 0;
     } else {
       // Crear nuevo registro
       metricasMap.set(productoId, {
@@ -378,7 +378,7 @@ async function procesarVentasStaging(periodo: string, reprocesar: boolean = fals
         stock_costo: Number(v.stock_costo) || 0,
         stock_volumen: Number(v.stock_volumen) || 0,
         unidades_vendidas: Number(v.unidades_vendidas) || 0,
-        veces_pedido: Number(v.veces_pedido) || 1,
+        veces_pedido: Number(v.veces_pedido) || 0,
       });
     }
   }
