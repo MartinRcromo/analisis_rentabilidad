@@ -4,145 +4,161 @@ import { createAdminClient } from '@/lib/supabase/server';
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
-    const periodo = searchParams.get('periodo');
     const empresa = searchParams.get('empresa') || 'todas';
+    const anio = searchParams.get('anio');
+    const meses = searchParams.get('meses'); // formato: "1,2,3" o "11,12"
 
     const supabase = createAdminClient();
 
-    // Determinar período a usar (el más reciente si no se especifica)
-    let periodoActual = periodo;
-    if (!periodoActual) {
-      const { data: ultimoPeriodo } = await supabase
-        .from('analisis_producto')
-        .select('periodo')
-        .order('periodo', { ascending: false })
-        .limit(1)
-        .single();
+    // Obtener períodos disponibles
+    const { data: periodosDisponibles } = await supabase.rpc('get_periodos_disponibles');
 
-      if (ultimoPeriodo) {
-        periodoActual = ultimoPeriodo.periodo;
+    // Determinar períodos a usar
+    let periodosSeleccionados: string[] = [];
+
+    if (anio && meses) {
+      // Usuario seleccionó año y meses específicos
+      const mesesArray = meses.split(',').map((m) => parseInt(m.trim()));
+      periodosSeleccionados = mesesArray.map((mes) => {
+        const mesStr = mes.toString().padStart(2, '0');
+        return `${anio}-${mesStr}-01`;
+      });
+    } else {
+      // Usar el período más reciente por defecto
+      if (periodosDisponibles && periodosDisponibles.length > 0) {
+        periodosSeleccionados = [periodosDisponibles[0].periodo];
       } else {
         return NextResponse.json({ error: 'No hay datos de análisis disponibles' }, { status: 404 });
       }
     }
 
-    // 1. Obtener resumen del período usando función SQL optimizada
-    // Esto evita el límite implícito de 1000 registros de Supabase
-    const { data: resumenData, error: errorResumen } = await supabase.rpc('calcular_resumen_dashboard', {
-      p_periodo: periodoActual,
+    // 1. Obtener KPIs principales
+    const { data: kpisData, error: errorKpis } = await supabase.rpc('calcular_dashboard_kpis', {
+      p_periodos: periodosSeleccionados,
       p_empresa: empresa,
     });
 
-    if (errorResumen) {
-      console.error('Error obteniendo resumen:', errorResumen);
-      return NextResponse.json({ error: 'Error obteniendo datos de análisis' }, { status: 500 });
+    if (errorKpis) {
+      console.error('Error obteniendo KPIs:', errorKpis);
+      // Fallback a función anterior si la nueva no existe
+      const { data: resumenData } = await supabase.rpc('calcular_resumen_dashboard', {
+        p_periodo: periodosSeleccionados[0],
+        p_empresa: empresa,
+      });
+
+      const resumenRow = resumenData?.[0] || {};
+      return NextResponse.json({
+        periodo: periodosSeleccionados[0],
+        periodos_disponibles: periodosDisponibles || [],
+        empresa,
+        kpis: {
+          facturacion: 0,
+          costo_mercaderia: 0,
+          unidades_vendidas: 0,
+          stock_volumen: 0,
+          stock_valorizado: 0,
+          cantidad_pedidos: 0,
+          total_productos: Number(resumenRow.total_productos) || 0,
+          productos_perdida: Number(resumenRow.productos_perdida) || 0,
+          productos_beneficio: 0,
+          resultado_neto: Number(resumenRow.resultado_neto) || 0,
+          subrubros_perdida: 0,
+          subrubros_beneficio: 0,
+        },
+        gastos_por_empresa: [],
+        evolucion: [],
+      });
     }
 
-    const resumenRow = resumenData?.[0] || {
+    const kpis = kpisData?.[0] || {
+      facturacion: 0,
+      costo_mercaderia: 0,
+      unidades_vendidas: 0,
+      stock_volumen: 0,
+      stock_valorizado: 0,
+      cantidad_pedidos: 0,
       total_productos: 0,
       productos_perdida: 0,
-      perdida_total: 0,
-      beneficio_total: 0,
+      productos_beneficio: 0,
       resultado_neto: 0,
-      pct_perdida: 0,
+      subrubros_perdida: 0,
+      subrubros_beneficio: 0,
     };
 
-    const resumen = {
-      total_productos: Number(resumenRow.total_productos),
-      productos_perdida: Number(resumenRow.productos_perdida),
-      perdida_total: Number(resumenRow.perdida_total),
-      beneficio_total: Number(resumenRow.beneficio_total),
-      resultado_neto: Number(resumenRow.resultado_neto),
-      pct_perdida: Number(resumenRow.pct_perdida),
-    };
-
-    // 2. Obtener distribución de gastos
-    const { data: gastos } = await supabase
-      .from('gastos_mensuales')
-      .select('*')
-      .eq('periodo', periodoActual)
-      .single();
-
-    const distribucion_gastos = gastos
-      ? {
-          facturacion: gastos.cat1_facturacion_final,
-          volumen: gastos.cat2_volumen_final,
-          credito: gastos.cat3_credito_final,
-          rentabilidad: gastos.cat4_rentabilidad_final,
-          movimiento: gastos.cat5_movimiento_final,
-        }
-      : {
-          facturacion: 0,
-          volumen: 0,
-          credito: 0,
-          rentabilidad: 0,
-          movimiento: 0,
-        };
-
-    // 3. Obtener evolución últimos 6 meses usando función SQL optimizada
-    const { data: evolucionData } = await supabase.rpc('calcular_evolucion_dashboard', {
-      p_empresa: empresa,
+    // 2. Obtener gastos por empresa
+    const { data: gastosData } = await supabase.rpc('calcular_gastos_por_empresa', {
+      p_periodos: periodosSeleccionados,
     });
 
-    const evolucion_6_meses = (evolucionData || []).map((e: { periodo: string; beneficio: number; perdida: number; resultado: number }) => ({
+    const gastos_por_empresa = (gastosData || []).map((g: {
+      empresa: string;
+      ventas_total: number;
+      gastos_total: number;
+      pct_gastos: number;
+      margen_bruto_total: number;
+      gasto_minimo_pct: number;
+    }) => ({
+      empresa: g.empresa,
+      ventas: Number(g.ventas_total),
+      gastos: Number(g.gastos_total),
+      pct_gastos: Number(g.pct_gastos),
+      margen_bruto: Number(g.margen_bruto_total),
+      gasto_minimo_pct: Number(g.gasto_minimo_pct),
+    }));
+
+    // 3. Obtener evolución (solo resultado)
+    const { data: evolucionData } = await supabase.rpc('calcular_evolucion_resultado', {
+      p_empresa: empresa,
+      p_limit: 6,
+    });
+
+    // Fallback si la función nueva no existe
+    let evolucion = (evolucionData || []).map((e: { periodo: string; resultado: number }) => ({
       periodo: e.periodo,
-      beneficio: Number(e.beneficio),
-      perdida: Number(e.perdida),
       resultado: Number(e.resultado),
     }));
 
-    // 4. Obtener top subrubros usando función SQL optimizada (< 1 segundo)
-    const { data: subrubrosData } = await supabase.rpc('calcular_subrubros', {
-      p_periodo: periodoActual,
-    });
-
-    // Filtrar por empresa si se especificó
-    let subrubrosFiltrados = subrubrosData || [];
-    if (empresa && empresa !== 'todas') {
-      subrubrosFiltrados = subrubrosFiltrados.filter((s: { empresa: string }) => s.empresa === empresa);
+    // Si no hay datos de la nueva función, usar la anterior
+    if (evolucion.length === 0) {
+      const { data: evolucionOld } = await supabase.rpc('calcular_evolucion_dashboard', {
+        p_empresa: empresa,
+      });
+      evolucion = (evolucionOld || []).map((e: { periodo: string; resultado: number }) => ({
+        periodo: e.periodo,
+        resultado: Number(e.resultado),
+      }));
     }
 
-    // Tipo para subrubros con markup
-    type SubrubroConMarkup = {
-      subrubro: string;
-      empresa: string;
-      total_productos: number;
-      resultado: number;
-      markup_actual: number;
-      markup_min: number;
-    };
-
-    // Top 10 peores (ya viene ordenado por resultado ASC)
-    const topPeoresData = subrubrosFiltrados.slice(0, 10).map((s: SubrubroConMarkup) => ({
-      subrubro: s.subrubro,
-      empresa: s.empresa,
-      total_productos: Number(s.total_productos),
-      resultado: Number(s.resultado),
-      markup_actual: Number(s.markup_actual) || 0,
-      markup_min: Number(s.markup_min) || 0,
-    }));
-
-    // Top 10 mejores (mayor resultado - invertir el orden)
-    const topMejoresData = [...subrubrosFiltrados]
-      .sort((a: { resultado: number }, b: { resultado: number }) => Number(b.resultado) - Number(a.resultado))
-      .slice(0, 10)
-      .map((s: SubrubroConMarkup) => ({
-        subrubro: s.subrubro,
-        empresa: s.empresa,
-        total_productos: Number(s.total_productos),
-        resultado: Number(s.resultado),
-        markup_actual: Number(s.markup_actual) || 0,
-        markup_min: Number(s.markup_min) || 0,
-      }));
+    // Formatear períodos para mostrar
+    const periodosFormateados = periodosSeleccionados.map((p) => {
+      const date = new Date(p);
+      return date.toLocaleDateString('es-AR', { year: 'numeric', month: 'short' });
+    });
 
     return NextResponse.json({
-      periodo: periodoActual,
+      periodo: periodosSeleccionados.length === 1
+        ? periodosSeleccionados[0]
+        : `${periodosSeleccionados.length} meses`,
+      periodos_seleccionados: periodosSeleccionados,
+      periodos_disponibles: periodosDisponibles || [],
+      periodo_display: periodosFormateados.join(', '),
       empresa,
-      resumen,
-      evolucion_6_meses,
-      distribucion_gastos,
-      top_peores: topPeoresData || [],
-      top_mejores: topMejoresData || [],
+      kpis: {
+        facturacion: Number(kpis.facturacion),
+        costo_mercaderia: Number(kpis.costo_mercaderia),
+        unidades_vendidas: Number(kpis.unidades_vendidas),
+        stock_volumen: Number(kpis.stock_volumen),
+        stock_valorizado: Number(kpis.stock_valorizado),
+        cantidad_pedidos: Number(kpis.cantidad_pedidos),
+        total_productos: Number(kpis.total_productos),
+        productos_perdida: Number(kpis.productos_perdida),
+        productos_beneficio: Number(kpis.productos_beneficio),
+        resultado_neto: Number(kpis.resultado_neto),
+        subrubros_perdida: Number(kpis.subrubros_perdida),
+        subrubros_beneficio: Number(kpis.subrubros_beneficio),
+      },
+      gastos_por_empresa,
+      evolucion,
     });
   } catch (error) {
     console.error('Error en dashboard:', error);

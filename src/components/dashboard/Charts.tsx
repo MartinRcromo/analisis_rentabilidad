@@ -4,6 +4,7 @@ import {
   BarChart,
   Bar,
   Line,
+  LineChart,
   PieChart,
   Pie,
   Cell,
@@ -14,6 +15,7 @@ import {
   Legend,
   ResponsiveContainer,
   ComposedChart,
+  ReferenceLine,
 } from 'recharts';
 
 // Colores
@@ -32,6 +34,11 @@ interface EvolucionData {
   periodo: string;
   beneficio: number;
   perdida: number;
+  resultado: number;
+}
+
+interface EvolucionResultadoData {
+  periodo: string;
   resultado: number;
 }
 
@@ -176,6 +183,39 @@ export function ProductoEvolucionChart({
           strokeWidth={2}
         />
       </ComposedChart>
+    </ResponsiveContainer>
+  );
+}
+
+// Gráfico de evolución simplificado (solo línea de resultado)
+export function EvolucionResultadoChart({ data }: { data: EvolucionResultadoData[] }) {
+  const formattedData = data.map((d) => ({
+    ...d,
+    periodoLabel: formatPeriodoShort(d.periodo),
+    resultadoM: d.resultado / 1e6,
+  }));
+
+  return (
+    <ResponsiveContainer width="100%" height={250}>
+      <LineChart data={formattedData}>
+        <CartesianGrid strokeDasharray="3 3" />
+        <XAxis dataKey="periodoLabel" fontSize={12} />
+        <YAxis fontSize={12} tickFormatter={(v) => `$${v}M`} />
+        <ReferenceLine y={0} stroke="#9ca3af" strokeDasharray="3 3" />
+        <Tooltip
+          formatter={(value: number | undefined) => value !== undefined ? [`$${value.toFixed(1)}M`, 'Resultado'] : ['', '']}
+          labelFormatter={(label) => `Período: ${label}`}
+        />
+        <Line
+          type="monotone"
+          dataKey="resultadoM"
+          name="Resultado"
+          stroke={COLORS.resultado}
+          strokeWidth={3}
+          dot={{ r: 5, fill: COLORS.resultado }}
+          activeDot={{ r: 7 }}
+        />
+      </LineChart>
     </ResponsiveContainer>
   );
 }
