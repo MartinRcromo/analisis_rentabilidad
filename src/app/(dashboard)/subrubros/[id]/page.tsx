@@ -25,6 +25,8 @@ import {
   Lightbulb,
   AlertTriangle,
   CheckCircle2,
+  Download,
+  ShoppingCart,
 } from 'lucide-react';
 import Link from 'next/link';
 
@@ -134,6 +136,7 @@ export default function SubrubroDetailPage() {
   const [soloEnPerdida, setSoloEnPerdida] = useState(false);
   const [sortColumn, setSortColumn] = useState<SortColumn>('resultado');
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
+  const [accionSeleccionada, setAccionSeleccionada] = useState<number | null>(null);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -177,6 +180,28 @@ export default function SubrubroDetailPage() {
       if (soloEnPerdida) return p.en_perdida;
       return true;
     })
+    .filter((p) => {
+      // Filtrar por acción seleccionada
+      if (accionSeleccionada !== null && data?.acciones_sugeridas) {
+        const accion = data.acciones_sugeridas[accionSeleccionada];
+        if (accion) {
+          // Filtrar según el tipo de acción
+          switch (accion.tipo) {
+            case 'subir_precio':
+              return p.en_perdida && p.markup_pct < p.markup_minimo_pct;
+            case 'revisar_stock':
+              return p.stock_costo > p.importe_ventas * 2;
+            case 'negociar_proveedor':
+              return p.en_perdida;
+            case 'discontinuar':
+              return p.en_perdida && p.importe_ventas < 10000;
+            default:
+              return p.en_perdida;
+          }
+        }
+      }
+      return true;
+    })
     .sort((a, b) => {
       const mult = sortDirection === 'asc' ? 1 : -1;
       const valA = a[sortColumn];
@@ -186,6 +211,58 @@ export default function SubrubroDetailPage() {
       }
       return ((valA as number) - (valB as number)) * mult;
     }) || [];
+
+  // Función para exportar productos a CSV
+  const exportarCSV = () => {
+    if (productosFiltrados.length === 0) return;
+
+    const headers = [
+      'Código',
+      'Producto',
+      'Proveedor',
+      'Empresa',
+      'Ventas',
+      'Costo',
+      'Margen Bruto',
+      'MU%',
+      'MU Min%',
+      'Stock $',
+      'Stock m³',
+      'Uds Vendidas',
+      'Pedidos',
+      'Gasto Total',
+      'Resultado',
+      'En Pérdida',
+    ];
+
+    const rows = productosFiltrados.map((p) => [
+      p.codigo,
+      `"${p.nombre.replace(/"/g, '""')}"`,
+      `"${p.proveedor.replace(/"/g, '""')}"`,
+      p.empresa,
+      p.importe_ventas.toFixed(2),
+      p.importe_costo.toFixed(2),
+      p.margen_bruto.toFixed(2),
+      p.markup_pct.toFixed(2),
+      p.markup_minimo_pct.toFixed(2),
+      p.stock_costo.toFixed(2),
+      p.stock_volumen.toFixed(4),
+      p.unidades_vendidas.toFixed(2),
+      p.veces_pedido,
+      p.gasto_total.toFixed(2),
+      p.resultado.toFixed(2),
+      p.en_perdida ? 'Sí' : 'No',
+    ]);
+
+    const csvContent = [headers.join(','), ...rows.map((r) => r.join(','))].join('\n');
+    const blob = new Blob(['\ufeff' + csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `productos_${data?.subrubro.nombre.replace(/\s+/g, '_')}_${new Date().toISOString().split('T')[0]}.csv`;
+    link.click();
+    URL.revokeObjectURL(url);
+  };
 
   const handleSort = (column: SortColumn) => {
     if (sortColumn === column) {
@@ -367,10 +444,10 @@ export default function SubrubroDetailPage() {
                 <div className="space-y-2">
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2">
-                      <div className="p-1.5 rounded bg-purple-100">
-                        <DollarSign className="h-3 w-3 text-purple-600" />
+                      <div className="p-1.5 rounded bg-green-100">
+                        <DollarSign className="h-3 w-3 text-green-600" />
                       </div>
-                      <span className="text-xs text-gray-600">Capital</span>
+                      <span className="text-xs text-gray-600">Stock $</span>
                     </div>
                     <span className="text-sm font-semibold">{formatCurrency(totales.stock_costo)}</span>
                   </div>
@@ -379,16 +456,25 @@ export default function SubrubroDetailPage() {
                       <div className="p-1.5 rounded bg-amber-100">
                         <Boxes className="h-3 w-3 text-amber-600" />
                       </div>
-                      <span className="text-xs text-gray-600">Volumen</span>
+                      <span className="text-xs text-gray-600">Stock m³</span>
                     </div>
                     <span className="text-sm font-semibold">{formatNumber(totales.stock_volumen, 2)} m³</span>
                   </div>
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2">
-                      <div className="p-1.5 rounded bg-blue-100">
-                        <Truck className="h-3 w-3 text-blue-600" />
+                      <div className="p-1.5 rounded bg-purple-100">
+                        <ShoppingCart className="h-3 w-3 text-purple-600" />
                       </div>
-                      <span className="text-xs text-gray-600">Movimientos</span>
+                      <span className="text-xs text-gray-600">Uds Vendidas</span>
+                    </div>
+                    <span className="text-sm font-semibold">{formatNumber(totales.unidades_vendidas)}</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <div className="p-1.5 rounded bg-cyan-100">
+                        <Truck className="h-3 w-3 text-cyan-600" />
+                      </div>
+                      <span className="text-xs text-gray-600">Pedidos</span>
                     </div>
                     <span className="text-sm font-semibold">{formatNumber(totales.veces_pedido)}</span>
                   </div>
@@ -400,8 +486,13 @@ export default function SubrubroDetailPage() {
                 <h3 className="text-sm font-semibold text-gray-700 mb-3">Desglose Gastos</h3>
                 <div className="space-y-2">
                   {gastosDesglosados.map((gasto) => (
-                    <div key={gasto.nombre} className="flex items-center gap-2">
-                      <gasto.icono className="h-3 w-3 text-gray-400 flex-shrink-0" />
+                    <div key={gasto.nombre} className="flex items-center gap-2" title={gasto.nombre}>
+                      <div className="relative group">
+                        <gasto.icono className="h-3 w-3 text-gray-400 flex-shrink-0 cursor-help" />
+                        <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1 px-2 py-1 bg-gray-800 text-white text-xs rounded whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-20">
+                          {gasto.nombre}
+                        </div>
+                      </div>
                       <div className="flex-1 h-2 bg-gray-100 rounded-full overflow-hidden">
                         <div
                           className={`h-full ${gasto.color} transition-all`}
@@ -444,20 +535,37 @@ export default function SubrubroDetailPage() {
         {/* Acciones Sugeridas */}
         <Card>
           <CardHeader className="py-3 px-4">
-            <CardTitle className="text-sm font-semibold text-gray-700 flex items-center gap-2">
-              <Lightbulb className="h-4 w-4" />
-              Acciones Sugeridas
-            </CardTitle>
+            <div className="flex items-center justify-between">
+              <CardTitle className="text-sm font-semibold text-gray-700 flex items-center gap-2">
+                <Lightbulb className="h-4 w-4" />
+                Acciones Sugeridas
+              </CardTitle>
+              {accionSeleccionada !== null && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-6 px-2 text-xs"
+                  onClick={() => setAccionSeleccionada(null)}
+                >
+                  Limpiar filtro
+                </Button>
+              )}
+            </div>
           </CardHeader>
           <CardContent className="px-4 pb-4 pt-0">
             {acciones_sugeridas.length === 0 ? (
               <p className="text-sm text-gray-500 text-center py-4">No hay acciones sugeridas</p>
             ) : (
-              <div className="space-y-2 max-h-[140px] overflow-y-auto">
-                {acciones_sugeridas.slice(0, 3).map((accion, idx) => (
+              <div className="space-y-2 max-h-[160px] overflow-y-auto">
+                {acciones_sugeridas.slice(0, 4).map((accion, idx) => (
                   <div
                     key={idx}
-                    className={`p-2.5 rounded-lg border ${prioridadColor[accion.prioridad]} flex items-start justify-between gap-2`}
+                    onClick={() => setAccionSeleccionada(accionSeleccionada === idx ? null : idx)}
+                    className={`p-2.5 rounded-lg border cursor-pointer transition-all ${
+                      accionSeleccionada === idx
+                        ? 'ring-2 ring-blue-500 ring-offset-1'
+                        : ''
+                    } ${prioridadColor[accion.prioridad]} flex items-start justify-between gap-2 hover:shadow-md`}
                   >
                     <div className="flex items-start gap-2 flex-1 min-w-0">
                       {prioridadIcon[accion.prioridad]}
@@ -481,9 +589,16 @@ export default function SubrubroDetailPage() {
       <Card>
         <CardHeader className="py-3 px-4">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-            <CardTitle className="text-sm font-semibold flex items-center gap-2">
-              Productos ({productosFiltrados.length})
-            </CardTitle>
+            <div className="flex items-center gap-2">
+              <CardTitle className="text-sm font-semibold flex items-center gap-2">
+                Productos ({productosFiltrados.length})
+              </CardTitle>
+              {accionSeleccionada !== null && (
+                <Badge variant="secondary" className="text-xs">
+                  Filtrado por acción
+                </Badge>
+              )}
+            </div>
             <div className="flex items-center gap-3">
               <div className="relative">
                 <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
@@ -505,6 +620,16 @@ export default function SubrubroDetailPage() {
                   Solo pérdidas
                 </Label>
               </div>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-8 gap-1"
+                onClick={exportarCSV}
+                disabled={productosFiltrados.length === 0}
+              >
+                <Download className="h-3 w-3" />
+                <span className="hidden sm:inline">Exportar</span>
+              </Button>
             </div>
           </div>
         </CardHeader>
