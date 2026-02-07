@@ -236,48 +236,6 @@ export interface GastoExcelRow {
   'concatenar sector+tipogasto': string;
 }
 
-// Tipos para respuestas de API
-
-export interface DashboardData {
-  resumen: {
-    total_productos: number;
-    productos_perdida: number;
-    perdida_total: number;
-    beneficio_total: number;
-    resultado_neto: number;
-    pct_perdida: number;
-  };
-  evolucion_6_meses: Array<{
-    periodo: string;
-    beneficio: number;
-    perdida: number;
-    resultado: number;
-  }>;
-  distribucion_gastos: {
-    facturacion: number;
-    ocupacion: number; // Antes: volumen
-    movimiento: number; // Nuevo
-    credito: number;
-    rentabilidad: number;
-  };
-  top_peores: AnalisisSubrubroView[];
-  top_mejores: AnalisisSubrubroView[];
-}
-
-export interface SimulacionResultado {
-  nuevo_markup_pct: number;
-  nuevo_precio: number;
-  nuevas_ventas: number;
-  nuevo_margen: number;
-  nuevo_stock_unidades: number;
-  nuevo_gasto_total: number;
-  nuevo_resultado: number;
-  en_perdida: boolean;
-  ahorro_credito: number;
-  ahorro_volumen: number;
-  mejora_resultado: number;
-}
-
 export interface Recomendacion {
   prioridad: 'critica' | 'alta' | 'media' | 'baja';
   tipo: 'subir_markup' | 'reducir_stock' | 'evaluar_proveedor' | 'otro';
@@ -285,40 +243,3 @@ export interface Recomendacion {
   impacto_estimado: number | null;
 }
 
-// Tipos para filtros
-
-export interface ProductoFiltros {
-  periodo?: string;
-  empresa?: 'Cromo' | 'BBA' | 'todas';
-  subrubro_id?: number[];
-  proveedor_id?: number[];
-  estado?: 'todos' | 'perdida' | 'beneficio';
-  busqueda?: string;
-  page?: number;
-  limit?: number;
-}
-
-export interface PaginatedResponse<T> {
-  data: T[];
-  pagination: {
-    total: number;
-    page: number;
-    pages: number;
-    hasMore: boolean;
-  };
-}
-
-// Tipos para totales de período
-
-export interface TotalesPeriodo {
-  total_facturacion: number;
-  total_volumen_m3: number; // Para ocupación
-  total_stock_valorizado: number;
-  total_margen_bruto: number;
-  total_veces_pedido: number; // Nuevo: para movimiento
-  gastos_facturacion: number;
-  gastos_ocupacion: number; // Antes: gastos_volumen
-  gastos_movimiento: number; // Nuevo
-  gastos_credito: number;
-  gastos_rentabilidad: number;
-}
