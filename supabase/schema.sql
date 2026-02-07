@@ -6,18 +6,6 @@
 -- MAESTROS
 -- ============================================================================
 
-CREATE TABLE IF NOT EXISTS empresas (
-    id SERIAL PRIMARY KEY,
-    codigo VARCHAR(10) UNIQUE NOT NULL,
-    nombre VARCHAR(200) NOT NULL,
-    activo BOOLEAN DEFAULT true
-);
-
-INSERT INTO empresas (codigo, nombre) VALUES
-    ('Cromo', 'Cromosol'),
-    ('BBA', 'BBA')
-ON CONFLICT (codigo) DO NOTHING;
-
 CREATE TABLE IF NOT EXISTS proveedores (
     id SERIAL PRIMARY KEY,
     codigo VARCHAR(50) UNIQUE NOT NULL,
