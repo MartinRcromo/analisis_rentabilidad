@@ -108,7 +108,7 @@ export function DistribucionGastosChart({ data }: { data: DistribucionData }) {
           ))}
         </Pie>
         <Tooltip
-          formatter={(value: number) => [`$${(value / 1e6).toFixed(1)}M`, '']}
+          formatter={(value: number | undefined) => value !== undefined ? [`$${(value / 1e6).toFixed(1)}M`, ''] : ['', '']}
         />
         <Legend />
       </PieChart>
@@ -134,7 +134,7 @@ export function SimpleBarChart({
         <CartesianGrid strokeDasharray="3 3" />
         <XAxis type="number" fontSize={12} tickFormatter={(v) => `$${(v / 1e6).toFixed(0)}M`} />
         <YAxis type="category" dataKey={nameKey} fontSize={12} width={150} />
-        <Tooltip formatter={(value: number) => [`$${(value / 1e6).toFixed(1)}M`, '']} />
+        <Tooltip formatter={(value: number | undefined) => value !== undefined ? [`$${(value / 1e6).toFixed(1)}M`, ''] : ['', '']} />
         <Bar dataKey={dataKey} fill={color} />
       </BarChart>
     </ResponsiveContainer>
@@ -163,7 +163,7 @@ export function ProductoEvolucionChart({
         <CartesianGrid strokeDasharray="3 3" />
         <XAxis dataKey="periodo" fontSize={12} />
         <YAxis fontSize={12} tickFormatter={(v) => `${v}M`} />
-        <Tooltip formatter={(value: number) => [`$${value.toFixed(2)}M`, '']} />
+        <Tooltip formatter={(value: number | undefined) => value !== undefined ? [`$${value.toFixed(2)}M`, ''] : ['', '']} />
         <Legend />
         <Bar dataKey="ventas" name="Ventas" fill={COLORS.facturacion} />
         <Line
