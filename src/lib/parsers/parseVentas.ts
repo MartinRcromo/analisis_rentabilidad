@@ -76,11 +76,11 @@ export async function parseVentasExcel(buffer: ArrayBuffer): Promise<ParseVentas
       };
     }
 
-    // Validar columnas
+    // Validar columnas (normalizando espacios)
     const firstRow = jsonData[0];
-    const existingColumns = Object.keys(firstRow);
+    const existingColumns = Object.keys(firstRow).map((c) => c.toLowerCase().trim());
     const missingColumns = REQUIRED_COLUMNS.filter(
-      (col) => !existingColumns.some((c) => c.toLowerCase() === col.toLowerCase())
+      (col) => !existingColumns.includes(col.toLowerCase())
     );
 
     if (missingColumns.length > 0) {
@@ -101,10 +101,10 @@ export async function parseVentasExcel(buffer: ArrayBuffer): Promise<ParseVentas
       const rowNum = i + 2; // +2 porque Excel empieza en 1 y tiene header
 
       try {
-        // Normalizar nombres de columnas (case insensitive)
+        // Normalizar nombres de columnas (case insensitive + trim espacios)
         const normalizedRow: Record<string, unknown> = {};
         for (const [key, value] of Object.entries(row)) {
-          normalizedRow[key.toLowerCase()] = value;
+          normalizedRow[key.toLowerCase().trim()] = value;
         }
 
         // Extraer valores

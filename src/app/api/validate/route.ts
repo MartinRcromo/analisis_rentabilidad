@@ -69,9 +69,9 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    // Columnas encontradas (normalizadas a minúscula)
+    // Columnas encontradas (normalizadas a minúscula + trim espacios)
     const primeraFila = jsonData[0];
-    const columnasEncontradas = Object.keys(primeraFila);
+    const columnasEncontradas = Object.keys(primeraFila).map((c) => c.trim());
     const columnasEncontradasLower = columnasEncontradas.map((c) => c.toLowerCase());
 
     const columnasRequeridas = tipo === 'ventas' ? COLUMNAS_VENTAS : COLUMNAS_GASTOS;
@@ -92,7 +92,7 @@ export async function POST(request: NextRequest) {
     if (tipo === 'ventas') {
       jsonData.slice(0, 100).forEach((row, i) => {
         const normalizado: Record<string, unknown> = {};
-        for (const [k, v] of Object.entries(row)) normalizado[k.toLowerCase()] = v;
+        for (const [k, v] of Object.entries(row)) normalizado[k.toLowerCase().trim()] = v;
         const empresa = String(normalizado['empresa'] || '').trim();
         if (empresa) {
           empresasEncontradas[empresa] = (empresasEncontradas[empresa] || 0) + 1;
@@ -108,7 +108,7 @@ export async function POST(request: NextRequest) {
     // Muestra de primeras 3 filas (columnas normalizadas)
     const muestra = jsonData.slice(0, 3).map((row) => {
       const norm: Record<string, unknown> = {};
-      for (const [k, v] of Object.entries(row)) norm[k.toLowerCase()] = v;
+      for (const [k, v] of Object.entries(row)) norm[k.toLowerCase().trim()] = v;
       return norm;
     });
 
@@ -118,7 +118,7 @@ export async function POST(request: NextRequest) {
       const periodosSet = new Set<string>();
       jsonData.slice(0, 50).forEach((row) => {
         const norm: Record<string, unknown> = {};
-        for (const [k, v] of Object.entries(row)) norm[k.toLowerCase()] = v;
+        for (const [k, v] of Object.entries(row)) norm[k.toLowerCase().trim()] = v;
         const periodo = String(norm['periodo'] || '').trim();
         if (periodo) periodosSet.add(periodo);
       });
