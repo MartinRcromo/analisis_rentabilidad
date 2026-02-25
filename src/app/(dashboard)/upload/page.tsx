@@ -8,9 +8,25 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Alert } from '@/components/ui/alert';
 import { Progress } from '@/components/ui/progress';
-import { Upload, FileSpreadsheet, CheckCircle, AlertCircle, Loader2 } from 'lucide-react';
+import { Badge } from '@/components/ui/badge';
+import { Upload, FileSpreadsheet, CheckCircle, AlertCircle, Loader2, Search } from 'lucide-react';
 
 type UploadStep = 'periodo' | 'ventas' | 'gastos' | 'calculate' | 'complete';
+
+interface ValidacionResult {
+  valido: boolean;
+  hojas: string[];
+  hoja_usada: string;
+  total_filas: number;
+  columnas_encontradas: string[];
+  columnas_requeridas: string[];
+  columnas_faltantes: string[];
+  columnas_extra: string[];
+  empresas_encontradas?: Record<string, number>;
+  periodos_muestra?: string[];
+  muestra?: Record<string, unknown>[];
+  errores: string[];
+}
 
 interface UploadResult {
   success: boolean;
@@ -22,10 +38,15 @@ export default function UploadPage() {
   const [step, setStep] = useState<UploadStep>('periodo');
   const [periodo, setPeriodo] = useState('');
   const [loading, setLoading] = useState(false);
+  const [validating, setValidating] = useState(false);
   const [results, setResults] = useState<{
     ventas?: UploadResult;
     gastos?: UploadResult;
     calculate?: UploadResult;
+  }>({});
+  const [validaciones, setValidaciones] = useState<{
+    ventas?: ValidacionResult;
+    gastos?: ValidacionResult;
   }>({});
 
   const handlePeriodoSubmit = () => {
@@ -35,6 +56,36 @@ export default function UploadPage() {
     setPeriodo(formattedPeriodo);
     setStep('ventas');
   };
+
+  const validarArchivo = useCallback(async (file: File, tipo: 'ventas' | 'gastos') => {
+    setValidating(true);
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('tipo', tipo);
+
+    try {
+      const response = await fetch('/api/validate', { method: 'POST', body: formData });
+      const data: ValidacionResult = await response.json();
+      setValidaciones((prev) => ({ ...prev, [tipo]: data }));
+    } catch (error) {
+      setValidaciones((prev) => ({
+        ...prev,
+        [tipo]: {
+          valido: false,
+          hojas: [],
+          hoja_usada: '',
+          total_filas: 0,
+          columnas_encontradas: [],
+          columnas_requeridas: [],
+          columnas_faltantes: [],
+          columnas_extra: [],
+          errores: [String(error)],
+        },
+      }));
+    } finally {
+      setValidating(false);
+    }
+  }, []);
 
   const uploadVentas = useCallback(
     async (file: File) => {
@@ -225,14 +276,25 @@ export default function UploadPage() {
                 Suba el archivo Excel con los datos de ventas del período {periodo.slice(0, 7)}
               </CardDescription>
             </CardHeader>
-            <CardContent>
-              <FileDropzone
-                onDrop={(files) => files[0] && uploadVentas(files[0])}
+            <CardContent className="space-y-4">
+              <FileDropzoneWithValidation
+                onDrop={(files) => {
+                  if (files[0]) {
+                    setValidaciones((prev) => ({ ...prev, ventas: undefined }));
+                    setResults((prev) => ({ ...prev, ventas: undefined }));
+                  }
+                }}
+                onValidate={(files) => files[0] && validarArchivo(files[0], 'ventas')}
+                onUpload={(files) => files[0] && uploadVentas(files[0])}
                 loading={loading}
+                validating={validating}
                 accept=".xlsx,.xls"
               />
+              {validaciones.ventas && (
+                <ValidacionPanel resultado={validaciones.ventas} />
+              )}
               {results.ventas && (
-                <ResultAlert result={results.ventas} className="mt-4" />
+                <ResultAlert result={results.ventas} className="mt-2" />
               )}
             </CardContent>
           </Card>
@@ -247,14 +309,25 @@ export default function UploadPage() {
                 Suba el archivo Excel con los gastos del período {periodo.slice(0, 7)}
               </CardDescription>
             </CardHeader>
-            <CardContent>
-              <FileDropzone
-                onDrop={(files) => files[0] && uploadGastos(files[0])}
+            <CardContent className="space-y-4">
+              <FileDropzoneWithValidation
+                onDrop={(files) => {
+                  if (files[0]) {
+                    setValidaciones((prev) => ({ ...prev, gastos: undefined }));
+                    setResults((prev) => ({ ...prev, gastos: undefined }));
+                  }
+                }}
+                onValidate={(files) => files[0] && validarArchivo(files[0], 'gastos')}
+                onUpload={(files) => files[0] && uploadGastos(files[0])}
                 loading={loading}
+                validating={validating}
                 accept=".xlsx,.xls"
               />
+              {validaciones.gastos && (
+                <ValidacionPanel resultado={validaciones.gastos} />
+              )}
               {results.gastos && (
-                <ResultAlert result={results.gastos} className="mt-4" />
+                <ResultAlert result={results.gastos} className="mt-2" />
               )}
             </CardContent>
           </Card>
@@ -362,56 +435,198 @@ export default function UploadPage() {
   );
 }
 
-function FileDropzone({
+function FileDropzoneWithValidation({
   onDrop,
+  onValidate,
+  onUpload,
   loading,
+  validating,
   accept,
 }: {
   onDrop: (files: File[]) => void;
+  onValidate: (files: File[]) => void;
+  onUpload: (files: File[]) => void;
   loading: boolean;
+  validating: boolean;
   accept: string;
 }) {
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
-    onDrop,
+    onDrop: (files) => {
+      if (files[0]) {
+        setSelectedFile(files[0]);
+        onDrop(files);
+      }
+    },
     accept: {
       'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': ['.xlsx'],
       'application/vnd.ms-excel': ['.xls'],
     },
     multiple: false,
-    disabled: loading,
+    disabled: loading || validating,
   });
 
   return (
-    <div
-      {...getRootProps()}
-      className={`flex cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed p-8 transition-colors ${
-        isDragActive
-          ? 'border-blue-500 bg-blue-50'
-          : loading
-            ? 'border-gray-200 bg-gray-50'
-            : 'border-gray-300 hover:border-gray-400'
-      }`}
-    >
-      <input {...getInputProps()} accept={accept} />
-      {loading ? (
-        <>
-          <Loader2 className="h-10 w-10 animate-spin text-gray-400" />
-          <p className="mt-2 text-gray-500">Procesando archivo...</p>
-        </>
-      ) : (
-        <>
-          {isDragActive ? (
-            <Upload className="h-10 w-10 text-blue-500" />
-          ) : (
-            <FileSpreadsheet className="h-10 w-10 text-gray-400" />
-          )}
-          <p className="mt-2 text-center text-gray-500">
-            {isDragActive
-              ? 'Suelte el archivo aquí'
-              : 'Arrastre un archivo Excel aquí, o haga clic para seleccionar'}
-          </p>
-          <p className="mt-1 text-sm text-gray-400">Solo archivos .xlsx o .xls</p>
-        </>
+    <div className="space-y-3">
+      <div
+        {...getRootProps()}
+        className={`flex cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed p-6 transition-colors ${
+          isDragActive
+            ? 'border-blue-500 bg-blue-50'
+            : loading || validating
+              ? 'border-gray-200 bg-gray-50'
+              : 'border-gray-300 hover:border-gray-400'
+        }`}
+      >
+        <input {...getInputProps()} accept={accept} />
+        {loading ? (
+          <>
+            <Loader2 className="h-8 w-8 animate-spin text-gray-400" />
+            <p className="mt-2 text-gray-500">Subiendo archivo...</p>
+          </>
+        ) : validating ? (
+          <>
+            <Loader2 className="h-8 w-8 animate-spin text-blue-400" />
+            <p className="mt-2 text-blue-500">Validando formato...</p>
+          </>
+        ) : (
+          <>
+            {isDragActive ? (
+              <Upload className="h-8 w-8 text-blue-500" />
+            ) : (
+              <FileSpreadsheet className="h-8 w-8 text-gray-400" />
+            )}
+            <p className="mt-2 text-center text-gray-500">
+              {selectedFile
+                ? `Archivo: ${selectedFile.name}`
+                : isDragActive
+                  ? 'Suelte el archivo aquí'
+                  : 'Arrastre un archivo Excel aquí, o haga clic para seleccionar'}
+            </p>
+            <p className="mt-1 text-sm text-gray-400">Solo archivos .xlsx o .xls</p>
+          </>
+        )}
+      </div>
+
+      {selectedFile && !loading && !validating && (
+        <div className="flex gap-2">
+          <Button
+            variant="outline"
+            className="flex-1 border-blue-200 text-blue-700 hover:bg-blue-50"
+            onClick={() => onValidate([selectedFile])}
+          >
+            <Search className="mr-2 h-4 w-4" />
+            Validar formato
+          </Button>
+          <Button
+            className="flex-1"
+            onClick={() => onUpload([selectedFile])}
+          >
+            <Upload className="mr-2 h-4 w-4" />
+            Subir archivo
+          </Button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ValidacionPanel({ resultado }: { resultado: ValidacionResult }) {
+  return (
+    <div className={`rounded-lg border p-4 text-sm ${resultado.valido ? 'border-green-200 bg-green-50' : 'border-red-200 bg-red-50'}`}>
+      <div className="mb-3 flex items-center gap-2">
+        {resultado.valido ? (
+          <CheckCircle className="h-5 w-5 text-green-500" />
+        ) : (
+          <AlertCircle className="h-5 w-5 text-red-500" />
+        )}
+        <span className={`font-semibold ${resultado.valido ? 'text-green-800' : 'text-red-800'}`}>
+          {resultado.valido ? 'Formato válido' : 'Formato con problemas'}
+        </span>
+        <span className="ml-auto text-gray-500">
+          {resultado.total_filas.toLocaleString()} filas | Hoja: {resultado.hoja_usada}
+        </span>
+      </div>
+
+      {/* Columnas faltantes */}
+      {resultado.columnas_faltantes.length > 0 && (
+        <div className="mb-3">
+          <p className="font-medium text-red-700">Columnas FALTANTES (requeridas):</p>
+          <div className="mt-1 flex flex-wrap gap-1">
+            {resultado.columnas_faltantes.map((col) => (
+              <Badge key={col} variant="destructive" className="text-xs">{col}</Badge>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Columnas encontradas */}
+      <div className="mb-3">
+        <p className="font-medium text-gray-700">Columnas encontradas en el archivo:</p>
+        <div className="mt-1 flex flex-wrap gap-1">
+          {resultado.columnas_encontradas.map((col) => {
+            const esRequerida = resultado.columnas_requeridas.includes(col.toLowerCase());
+            return (
+              <Badge
+                key={col}
+                variant={esRequerida ? 'default' : 'secondary'}
+                className="text-xs"
+              >
+                {col}
+              </Badge>
+            );
+          })}
+        </div>
+        <p className="mt-1 text-xs text-gray-400">Azul = requerida y encontrada | Gris = extra (no requerida)</p>
+      </div>
+
+      {/* Empresas encontradas (solo ventas) */}
+      {resultado.empresas_encontradas && Object.keys(resultado.empresas_encontradas).length > 0 && (
+        <div className="mb-3">
+          <p className="font-medium text-gray-700">Valores de empresa encontrados:</p>
+          <div className="mt-1 flex flex-wrap gap-2">
+            {Object.entries(resultado.empresas_encontradas).map(([emp, count]) => {
+              const esValida = ['Cromo', 'BBA'].includes(emp);
+              return (
+                <span
+                  key={emp}
+                  className={`rounded px-2 py-0.5 text-xs font-medium ${
+                    esValida ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
+                  }`}
+                >
+                  {emp}: {count} filas {!esValida && '⚠ debe ser "Cromo" o "BBA"'}
+                </span>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Períodos encontrados */}
+      {resultado.periodos_muestra && resultado.periodos_muestra.length > 0 && (
+        <div className="mb-3">
+          <p className="font-medium text-gray-700">Períodos encontrados (muestra):</p>
+          <div className="mt-1 flex flex-wrap gap-1">
+            {resultado.periodos_muestra.map((p) => (
+              <span key={p} className="rounded bg-blue-100 px-2 py-0.5 text-xs text-blue-800">{p}</span>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Errores */}
+      {resultado.errores.length > 0 && (
+        <div>
+          <p className="font-medium text-red-700">Errores detectados:</p>
+          <ul className="mt-1 list-inside list-disc text-red-600">
+            {resultado.errores.map((e, i) => <li key={i}>{e}</li>)}
+          </ul>
+        </div>
+      )}
+
+      {resultado.valido && (
+        <p className="mt-2 text-green-700">El archivo tiene el formato correcto. Podés subirlo.</p>
       )}
     </div>
   );
